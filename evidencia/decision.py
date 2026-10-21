@@ -61,11 +61,15 @@ class HttpDecision:
         try:
             resp.raise_for_status()
             answers = resp.json()["answers"]
-        except (requests.RequestException, ValueError, KeyError) as e:
+        except (requests.RequestException, ValueError, KeyError, TypeError) as e:
             raise DecisionUnavailable(f"{self.url}: {e}") from e
+        if not isinstance(answers, dict):
+            raise DecisionUnavailable(f"{self.url}: answers of the wrong shape: {str(answers)[:200]}")
         missing = set(questions) - set(answers)
         if missing:
             raise DecisionUnavailable(f"{self.url}: no answer for {sorted(missing)}")
+        if not all(isinstance(answers[q], dict) for q in questions):
+            raise DecisionUnavailable(f"{self.url}: answers of the wrong shape: {str(answers)[:200]}")
         return answers
 
     def describe(self) -> dict[str, Any]:

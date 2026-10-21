@@ -132,3 +132,22 @@ def test_local_backend_without_torch_is_unavailable(monkeypatch):
     with pytest.raises(DecisionUnavailable, match="torch"):
         backend.ask({"question": "q", "passage": "p"}, {"select": load_locale("pt-PT")["select"]})
     assert backend.describe()["reachable"] is False
+
+
+@pytest.mark.parametrize("reply", [{"answers": [{"noul": 0.9}]}, {"answers": None}, [{"noul": 0.9}],
+                                   {"answers": {"select": 0.9}}])
+def test_a_reply_of_the_wrong_shape_is_unavailable(reply, monkeypatch):
+    from evidencia.decision import DecisionUnavailable, HttpDecision
+    decision = HttpDecision("http://decision")
+
+    class Reply:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return reply
+    monkeypatch.setattr(decision.session, "post", lambda *a, **k: Reply())
+    with pytest.raises(DecisionUnavailable):
+        decision.ask({"question": "q", "passage": "p"}, {"select": {}})

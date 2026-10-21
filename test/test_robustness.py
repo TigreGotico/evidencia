@@ -195,3 +195,37 @@ class SlowSend(FakeHttp):
 def test_a_reply_that_arrives_whole_after_the_timeout_window_of_the_stream_is_kept():
     http = SlowSend(lambda url, params: {"query": {"search": []}})
     assert Wikipedia(http, STOPWORDS, timeout=0.3).get_json("https://pt.wikipedia.org/w/api.php") == {"query": {"search": []}}
+
+
+class FlatDecision(StubDecision):
+    def ask(self, state, questions):
+        return {gate: 0.9 for gate in questions}
+
+
+def test_a_decision_reply_without_an_answer_object_is_unavailable_not_a_crash():
+    from evidencia.decision import DecisionUnavailable
+    from evidencia.gates import Gates
+    with pytest.raises(DecisionUnavailable):
+        Gates(FlatDecision()).select(Q, DOC)
+
+
+def test_a_corrupt_collection_file_is_set_aside_and_the_others_load(tmp_path):
+    first = Evidencia(Config(data_dir=str(tmp_path)), decision=StubDecision(), chat=StubChat(), sources={})
+    first.add_document("geo", DOC, "geo.txt")
+    (tmp_path / "broken.json").write_text("{not json")
+    second = Evidencia(Config(data_dir=str(tmp_path)), decision=StubDecision(), chat=StubChat(), sources={})
+    assert list(second.collections) == ["geo"]
+    assert (tmp_path / "broken.json.corrupt").read_text() == "{not json"
+
+
+def test_an_embedding_model_that_cannot_load_stops_the_start_and_keeps_the_files(tmp_path):
+    from evidencia.store import Store
+    first = Evidencia(Config(data_dir=str(tmp_path)), decision=StubDecision(), chat=StubChat(), sources={})
+    first.add_document("geo", DOC, "geo.txt")
+    saved = sorted(p.name for p in tmp_path.iterdir())
+
+    def offline(texts):
+        raise OSError("LocalEntryNotFoundError: cannot reach the Hub")
+    with pytest.raises(OSError):
+        Store(str(tmp_path)).load(offline)
+    assert sorted(p.name for p in tmp_path.iterdir()) == saved

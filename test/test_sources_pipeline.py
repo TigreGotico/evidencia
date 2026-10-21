@@ -92,7 +92,7 @@ def test_events_follow_the_pipeline_steps_in_order():
     # BM25 returns the two passages that share a word with the question
     assert names == ["candidates"] + ["select"] * 2 + ["evidence", "sufficient", "draft", "grounded"]
     assert [d["p_select"] for n, d in events if n == "select"] == [0.9, 0.1]
-    assert events[-1][1] == {"p": 0.9, "threshold": 0.5, "passed": True}
+    assert events[-1][1] == {"p": 0.9, "threshold": 0.8, "passed": True}
 
 
 def test_collections_survive_a_restart(tmp_path):

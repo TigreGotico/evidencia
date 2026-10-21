@@ -1,6 +1,6 @@
 # Three services: evidencia; llama.cpp serving AMALIA-9B, the European Portuguese chat model that writes answers; and
 # FlareSolverr, which solves the request of a public source behind a challenge page.
-# evidencia and llama.cpp download their models to the models volume on first start. Set EVIDENCIA_API_KEY before you expose the port
+# evidencia and llama.cpp download their models to their own volumes on first start. Set EVIDENCIA_API_KEY before you expose the port
 # beyond localhost. docs/deployment.md explains the GPU settings.
 services:
   evidencia:
@@ -16,23 +16,39 @@ services:
       - ./evidencia.toml:/config/evidencia.toml:ro
       - models:/models
       - collections:/collections
+    healthcheck:
+      # an image built by podman drops the Containerfile HEALTHCHECK, so compose states it
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
     depends_on:
-      - amalia
-      - flaresolverr
+      amalia:
+        condition: service_healthy
+      flaresolverr:
+        condition: service_started
   amalia:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
     # llama.cpp fits as many layers as the free GPU memory holds; a fixed --n-gpu-layers can run out of memory
     command: ["-hf", "duarteocarmo/AMALIA-9B-0626-DPO-GGUF:Q4_K_M", "--alias", "amalia",
               "--host", "0.0.0.0", "--port", "8000", "--ctx-size", "4096"]
     environment:
-      LLAMA_CACHE: /models/llama.cpp
+      LLAMA_CACHE: /models
+    healthcheck:
+      # the first start downloads 5.2 GB, so the start period is long
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30m
     devices:
       - nvidia.com/gpu=all
     volumes:
-      - models:/models
+      # its own volume: llama.cpp runs as root, and evidencia (uid 1000) must own the models volume
+      - llama-models:/models
   flaresolverr:
     # a headless browser that solves the request of a public source behind a challenge page
     image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
 volumes:
   models:
+  llama-models:
   collections:

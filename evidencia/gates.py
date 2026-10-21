@@ -35,10 +35,12 @@ class Gates:
         self.locale = load_locale(lang)
 
     def _noul(self, gate: str, state: dict) -> float:
-        answers = self.decision.ask(state, {gate: self.locale[gate]})
-        p = answers[gate].get("noul")
+        answer = self.decision.ask(state, {gate: self.locale[gate]}).get(gate)
+        if not isinstance(answer, dict):
+            raise DecisionUnavailable(f"{gate}: no answer object in the reply: {answer!r}")
+        p = answer.get("noul")
         if isinstance(p, bool) or not isinstance(p, (int, float)) or not 0.0 <= p <= 1.0:
-            raise DecisionUnavailable(f"{gate}: answer has no noul probability in [0, 1]: {answers[gate]}")
+            raise DecisionUnavailable(f"{gate}: answer has no noul probability in [0, 1]: {answer}")
         return float(p)
 
     def select(self, question: str, passage: str) -> float:

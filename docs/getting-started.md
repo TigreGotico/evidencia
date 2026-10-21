@@ -107,7 +107,7 @@ The response has the answer and the result of each gate (shortened):
   "gates": "applied",
   "evidence": [{"text": "Lisboa é a capital de Portugal.", "source": "lisboa.txt", "origin": "docs", "url": "", "p_select": 0.9974}],
   "sufficient": {"p": 0.9975, "threshold": 0.5, "passed": true},
-  "grounded": {"p": 0.9967, "threshold": 0.5, "passed": true},
+  "grounded": {"p": 0.9967, "threshold": 0.8, "passed": true},
   "sources": [{"name": "docs", "kind": "collection", "candidates": 2, "duplicates": 0, "error": null}]
 }
 ```
@@ -151,7 +151,7 @@ The response, shortened to the first item of `evidence`:
   "evidence": [{"text": "Lisboa Lisboa é a capital e maior cidade de Portugal, com uma população estimada de 548 703 habitantes em 2022 ...",
                 "source": "Lisboa", "origin": "pt.wikipedia", "url": "https://pt.wikipedia.org/wiki/Lisboa", "p_select": 0.8283}],
   "sufficient": {"p": 0.9534, "threshold": 0.5, "passed": true},
-  "grounded": {"p": 0.9533, "threshold": 0.5, "passed": true}
+  "grounded": {"p": 0.9533, "threshold": 0.8, "passed": true}
 }
 ```
 

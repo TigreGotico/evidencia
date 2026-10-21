@@ -37,7 +37,7 @@ class Config:
     decision: DecisionConfig = field(default_factory=DecisionConfig)
     select_threshold: float = 0.5
     sufficient_threshold: float = 0.5
-    grounded_threshold: float = 0.5
+    grounded_threshold: float = 0.8   # at 0.5, 10 of 22 wrong answers in eval/ pass; at 0.8, 3 pass
     n_candidates: int = 8       # passages retrieved in the first round; doubles each round
     top_k: int = 4              # selected passages kept as evidence
     max_rounds: int = 2

@@ -12,7 +12,7 @@ A gate is one yes/no question to the decision model. The model answers with a pr
 
 The question texts are in `evidencia/locale/pt-PT.json`, in European Portuguese. Each one is a System One `noul` question with an instruction and a description of the true and false cases. The wording is a machine draft. A native speaker has not reviewed it.
 
-All three thresholds are `0.5` by default. These values are not tuned. Refer to [Evaluation](evaluation.md) for the measured trade-offs.
+The select and sufficiency thresholds are `0.5` by default, and the grounding threshold is `0.8`. On the labelled set in `eval/`, with Jevásio-0.8B-v2, a grounding threshold of 0.5 lets 10 of 22 wrong answers through, and 0.8 lets 3 through, with no correct answer blocked at either value. Kev-0.8B blocks 9 of 22 correct answers at 0.8, so lower the threshold when you use Kev. The set is small and the values were read from the same set, so measure them on your own questions. Refer to [Evaluation](evaluation.md).
 
 ## Retrieval rounds
 

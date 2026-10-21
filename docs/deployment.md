@@ -41,7 +41,7 @@ cp evidencia.example.toml evidencia.toml
 podman-compose up
 ```
 
-The example file sends the chat requests to `http://amalia:8000/v1`, keeps the collections in `/collections`, and runs the decision model on the CPU. The first start downloads AMALIA (5.2 GB) to the `models` volume. The first question downloads the decision model (about 3 GB) to the same volume.
+The example file sends the chat requests to `http://amalia:8000/v1`, keeps the collections in `/collections`, and runs the decision model on the CPU. The first start downloads AMALIA (5.2 GB) to the `llama-models` volume. The first question downloads the decision model (about 3 GB) and the embedding model to the `models` volume. The two services use separate volumes, because llama.cpp runs as root and evidencia runs as uid 1000. The `evidencia` service starts when AMALIA reports healthy, and compose checks `/health` of the `evidencia` service every 30 seconds.
 
 The `amalia` service needs an NVIDIA GPU and the NVIDIA Container Toolkit. With Docker, replace `devices` with a GPU reservation (`deploy.resources.reservations.devices`).
 

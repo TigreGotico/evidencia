@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 
+import pytest
 import uvicorn
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -64,7 +65,7 @@ def test_an_agent_asks_through_mcp_over_stdio():
     assert answer["answer"] == "Lisboa [1]." and answer["abstained_at"] is None
     assert answer["evidence"][0] == {"text": "Lisboa é a capital de Portugal desde o século XIII.",
                                      "source": "geo.txt", "origin": "geo", "p_select": 0.9}
-    assert json.loads(text_of(checked)) == {"p": 0.9, "threshold": 0.5, "passed": True}
+    assert json.loads(text_of(checked)) == {"p": 0.9, "threshold": 0.8, "passed": True}
 
 
 def test_a_wrong_key_and_a_stopped_service_are_tool_errors_with_the_cause():
@@ -84,3 +85,30 @@ def test_the_mcp_command_writes_nothing_but_protocol_to_stdout():
     out = subprocess.run([sys.executable, "-c", "import evidencia, evidencia.mcp_server, evidencia.__main__"],
                          capture_output=True, timeout=60)
     assert out.returncode == 0 and out.stdout == b""
+
+
+class Refusing:
+    def __init__(self, outcome):
+        self.outcome = outcome
+
+    def get(self, url, **kwargs):
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+class NotJson:
+    status_code = 200
+    text = "<html>proxy page</html>"
+
+    def json(self):
+        raise ValueError("not json")
+
+
+def test_a_timeout_and_a_reply_that_is_not_json_are_service_errors():
+    import requests
+    from evidencia.mcp_server import Service, ServiceError
+    with pytest.raises(ServiceError, match="did not answer"):
+        Service("http://x", http=Refusing(requests.Timeout("read timed out"))).call("get", "/health")
+    with pytest.raises(ServiceError, match="not JSON"):
+        Service("http://x", http=Refusing(NotJson())).call("get", "/health")

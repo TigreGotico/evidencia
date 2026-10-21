@@ -10,9 +10,10 @@ import threading
 import time
 from importlib import resources
 from pathlib import PurePath
-from typing import Literal
+from typing import Annotated, Literal
 
-import requests
+from curl_cffi import requests as curl
+from curl_cffi.const import CurlECode, CurlOpt
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
@@ -27,6 +28,9 @@ from evidencia.sources import CATALOG
 LOG = logging.getLogger("evidencia")
 Format = Literal["text", "markdown", "html", "pdf"]
 HEALTH_TTL = 10.0       # seconds a decision-backend probe result is reused by /health
+URL_FETCH_TIMEOUT = 30.0    # seconds for the whole download of a document fetched by URL
+MAX_QUESTION = 2000         # characters in a question
+MAX_TEXT = 20_000           # characters in an answer or one evidence passage sent for a grounding check
 EXTENSIONS = {".txt": "text", ".md": "markdown", ".markdown": "markdown", ".html": "html", ".htm": "html", ".pdf": "pdf"}
 
 
@@ -46,7 +50,7 @@ class DocumentIn(BaseModel):
 
 
 class QuestionIn(BaseModel):
-    question: str = Field(min_length=1)
+    question: str = Field(min_length=1, max_length=MAX_QUESTION)
     collection: str | None = Field(default=None, description="A local collection to search")
     sources: list[str] = Field(default=[], description="Remote sources to search, from GET /v1/sources")
 
@@ -66,9 +70,9 @@ class RetrieveIn(QuestionIn):
 
 
 class GroundingIn(BaseModel):
-    question: str = Field(min_length=1)
-    evidence: list[str] = Field(min_length=1)
-    answer: str = Field(min_length=1)
+    question: str = Field(min_length=1, max_length=MAX_QUESTION)
+    evidence: list[Annotated[str, Field(max_length=MAX_TEXT)]] = Field(min_length=1, max_length=100)
+    answer: str = Field(min_length=1, max_length=MAX_TEXT)
 
 
 class StreamClosed(Exception):
@@ -81,6 +85,17 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
     app = FastAPI(title="evidencia", version=__version__,
                   description="Decision gates for retrieval-augmented generation.")
     app.state.engine = engine
+    # a JSON body escapes each character in at most 6 bytes; anything larger is refused before it is read
+    max_body = 6 * config.max_document_bytes + 64 * 1024
+
+    @app.middleware("http")
+    async def body_limit(request: Request, call_next):
+        size = request.headers.get("content-length")
+        if size is None and "chunked" in request.headers.get("transfer-encoding", ""):
+            return JSONResponse({"detail": "send the request body with a Content-Length"}, status_code=411)
+        if size and size.isdigit() and int(size) > max_body:
+            return JSONResponse({"detail": f"request body larger than {max_body} bytes"}, status_code=413)
+        return await call_next(request)
 
     def auth(request: Request):
         if not config.api_key:
@@ -123,9 +138,9 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
         if size > config.max_document_bytes:
             raise HTTPException(413, f"document larger than {config.max_document_bytes} bytes")
 
-    def ingest(name: str, source: str, content: str | bytes, fmt: str) -> dict:
+    def ingest(name: str, source: str, content: str | bytes, fmt: str, url: str = "") -> dict:
         try:
-            col, added = engine.add_document(name, content, source, fmt)
+            col, added = engine.add_document(name, content, source, fmt, url)
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
         return {"collection": name, "source": source, "passages": len(added), "total": len(col.passages)}
@@ -187,26 +202,30 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
         if not config.allow_url_ingest:
             raise HTTPException(403, "URL ingestion is disabled; set allow_url_ingest to enable it")
         try:
-            # a redirect could lead to a host the client may not name directly, so it is refused, not followed
-            with requests.get(doc.url, timeout=30, stream=True, allow_redirects=False) as resp:
-                if resp.is_redirect:
-                    raise HTTPException(422, "the URL redirects; give the final URL")
-                resp.raise_for_status()
-                data = bytearray()
-                for block in resp.iter_content(64 * 1024):
-                    data += block
-                    too_large(len(data))
-        except requests.RequestException as e:
+            # curl bounds the whole transfer, headers included, and stops at the size limit; a redirect could
+            # lead to a host the client may not name directly, so it is refused, not followed
+            with curl.Session(curl_options={CurlOpt.MAXFILESIZE_LARGE: config.max_document_bytes}) as http:
+                resp = http.get(doc.url, timeout=URL_FETCH_TIMEOUT, allow_redirects=False)
+        except curl.RequestsError as e:
+            if e.code == CurlECode.FILESIZE_EXCEEDED:
+                too_large(config.max_document_bytes + 1)
             LOG.warning("could not fetch %s: %s", doc.url, e)
             raise HTTPException(502, "could not fetch the URL") from None
+        if 300 <= resp.status_code < 400:
+            raise HTTPException(422, "the URL redirects; give the final URL")
+        if resp.status_code >= 400:
+            LOG.warning("could not fetch %s: HTTP %s", doc.url, resp.status_code)
+            raise HTTPException(502, "could not fetch the URL")
+        data = resp.content
+        too_large(len(data))
         if doc.format == "pdf":
-            return ingest(name, doc.source, bytes(data), doc.format)
+            return ingest(name, doc.source, data, doc.format, doc.url)
         charset = resp.headers.get("content-type", "").partition("charset=")[2].split(";")[0].strip(' "')
         try:
             text = data.decode(charset or "utf-8")
         except (LookupError, UnicodeDecodeError):
             raise HTTPException(422, "the URL did not return text in its declared encoding") from None
-        return ingest(name, doc.source, text, doc.format)
+        return ingest(name, doc.source, text, doc.format, doc.url)
 
     @app.post("/v1/collections/{name}/files", dependencies=[Depends(auth)])
     def add_file(name: str, file: UploadFile = File(...), source: str | None = Form(None),
@@ -233,8 +252,10 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
 
     @app.delete("/v1/collections/{name}/documents/{source:path}", dependencies=[Depends(auth)])
     def delete_document(name: str, source: str):
-        collection_or_404(name)
-        removed = engine.remove_document(name, source)
+        try:
+            removed = engine.remove_document(name, source)
+        except KeyError:
+            raise HTTPException(404, f"no collection {name!r}") from None
         if not removed:
             raise HTTPException(404, f"no document {source!r} in {name!r}")
         return {"collection": name, "source": source, "removed": removed}

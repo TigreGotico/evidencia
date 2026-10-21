@@ -10,6 +10,9 @@ data_dir = "/collections"
 # public Portuguese sources that a question can name; docs/sources.md gives their licences
 sources = ["pt.wikipedia", "wikidata", "dicionario-aberto"]
 
+# hybrid retrieval: BM25 and embeddings together; the image installs the hybrid extra
+embedding_model = "minishlab/potion-multilingual-128M"
+
 [generator_config]
 api_url = "http://amalia:8000/v1"
 
