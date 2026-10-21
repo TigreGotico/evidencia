@@ -74,7 +74,7 @@ def test_fail_closed_is_503_and_hides_the_cause(caplog):
 
 
 def test_missing_generator_is_502_and_hides_the_cause(caplog):
-    engine = Evidencia(Config(), decision=StubDecision())
+    engine = Evidencia(Config(generator=None), decision=StubDecision())
     c = TestClient(create_app(engine=engine))
     c.post("/v1/collections/geo/documents", json={"source": "geo.txt", "text": DOC})
     r = c.post("/v1/answer", json={"collection": "geo", "question": Q})

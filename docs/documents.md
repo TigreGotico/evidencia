@@ -1,8 +1,20 @@
-<!-- agent-hint: Backed by evidencia/index.py (chunk, _html, _markdown, _bounded, MAX_PASSAGE_CHARS, Collection) and the ingest routes in evidencia/api.py. The URL-ingest security statements must stay true: no redirects, a byte limit, off by default. HTML text extraction must never fetch or open anything. -->
+<!-- agent-hint: Backed by evidencia/index.py (chunk, _html, _markdown, _bounded, MAX_PASSAGE_CHARS, Collection, RRF_K), evidencia/store.py, evidencia/embeddings.py, Evidencia._novel in evidencia/pipeline.py, and the ingest routes in evidencia/api.py. The URL-ingest security statements must stay true: no redirects, a byte limit, off by default. HTML text extraction must never fetch or open anything. -->
 
 # Documents
 
-A collection is a named set of documents. evidencia splits each document into passages and indexes the passages with BM25. Collections are in memory. They are lost when the service stops.
+A collection is a named set of documents. evidencia splits each document into passages and indexes the passages with BM25, or with BM25 and embeddings together.
+
+## Persistence
+
+Set `data_dir` to keep collections on disk:
+
+```toml
+data_dir = "collections"
+```
+
+evidencia writes each collection to one JSON file in that folder, after each change. It loads every file when it starts, so the collections are there after a restart. Deleting a collection deletes its file. Without `data_dir`, collections are in memory and are lost when the service stops.
+
+A relative `data_dir` is relative to the folder where the service starts.
 
 ## Formats
 
@@ -20,6 +32,8 @@ Document content is always treated as text. A document that contains a URL or a 
 ## Sources
 
 Each document has a `source`, a name that you choose. A request with a known `source` replaces that document. Each passage has an `id` derived from its source, its position and its text.
+
+In Python, `add_document()` also takes a `url`, the address of the original. Each passage of the document keeps it, and the response shows it next to the evidence. Documents added over HTTP have an empty `url`.
 
 When two sources contain the same text, a search returns a passage for each source.
 
@@ -63,7 +77,32 @@ The service can reach every host that it can see on its network, including inter
 
 ## Retrieval
 
-BM25 ranks the passages for each question. A passage that shares no word with the question has a score of zero and is not returned. The [gates](gates.md) then decide which passages to use.
+By default, BM25 ranks the passages for each question. A passage that shares no word with the question has a score of zero and is not returned.
+
+Set `embedding_model` to turn on hybrid retrieval:
+
+```toml
+embedding_model = "minishlab/potion-multilingual-128M"
+```
+
+evidencia then ranks the passages twice: by BM25, and by the similarity of their embeddings to the question. It adds the two rankings with reciprocal-rank fusion. A passage in rank *r* of one ranking adds `1 / (60 + r)` to its score. Hybrid retrieval finds a passage that has the meaning of the question in other words, for example "população" for "habitantes". Every passage gets a score, so hybrid retrieval always returns candidates when the collection has passages.
+
+The `hybrid` extra installs model2vec. The model is a static embedding model of about 500 MB. It runs on the CPU and needs no GPU. It downloads to the Hugging Face cache on first use.
+
+The [gates](gates.md) then decide which passages to use.
+
+## Near-duplicates
+
+Copies of a page, quotes and reposts give many passages with almost the same text. Each one costs a select question, and they can fill the evidence with one fact.
+
+Set `dedupe_threshold` to drop them:
+
+```toml
+embedding_model = "minishlab/potion-multilingual-128M"
+dedupe_threshold = 0.95
+```
+
+evidencia compares the embedding of each candidate with the candidates before it in the same question. It drops a candidate when the cosine similarity is equal to or more than the threshold. The select gate does not score a dropped candidate, and `duplicates` in the `sources` report counts it. The setting needs `embedding_model`, and its value must be more than 0 and not more than 1. A value of 0.95 drops near-identical text only.
 
 ---
-[← Decision models](decision-models.md) · [Home](index.md) · [HTTP API →](api.md)
+[← Chat models](generators.md) · [Home](index.md) · [Public sources →](sources.md)

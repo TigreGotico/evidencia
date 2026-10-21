@@ -1,5 +1,6 @@
-# The decision model runs inside the service (decision.backend = "local") and downloads to the models volume
-# on first use. Set EVIDENCIA_API_KEY before exposing the port beyond localhost.
+# Two services: evidencia, and llama.cpp serving AMALIA-9B, the European Portuguese chat model that writes answers.
+# Both download their models to the models volume on first start. Set EVIDENCIA_API_KEY before you expose the port
+# beyond localhost. docs/deployment.md explains the GPU settings.
 services:
   evidencia:
     build: .
@@ -8,8 +9,24 @@ services:
     environment:
       EVIDENCIA_CONFIG: /config/evidencia.toml
       EVIDENCIA_API_KEY: ${EVIDENCIA_API_KEY:-}
+      EVIDENCIA_GENERATOR_KEY: ${EVIDENCIA_GENERATOR_KEY:-}
     volumes:
       - ./evidencia.toml:/config/evidencia.toml:ro
       - models:/models
+      - collections:/collections
+    depends_on:
+      - amalia
+  amalia:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    # llama.cpp fits as many layers as the free GPU memory holds; a fixed --n-gpu-layers can run out of memory
+    command: ["-hf", "duarteocarmo/AMALIA-9B-0626-DPO-GGUF:Q4_K_M", "--alias", "amalia",
+              "--host", "0.0.0.0", "--port", "8000", "--ctx-size", "4096"]
+    environment:
+      LLAMA_CACHE: /models/llama.cpp
+    devices:
+      - nvidia.com/gpu=all
+    volumes:
+      - models:/models
 volumes:
   models:
+  collections:

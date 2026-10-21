@@ -6,6 +6,8 @@ import tomllib
 from dataclasses import dataclass, field, fields
 from typing import Any
 
+from evidencia.version import __version__
+
 
 @dataclass
 class DecisionConfig:
@@ -38,11 +40,18 @@ class Config:
     top_k: int = 4              # selected passages kept as evidence
     max_rounds: int = 2
     fail_open: bool = True      # decision backend down: answer ungated (True) or refuse (False)
-    generator: str | None = None                       # chat engine plugin name, e.g. "ovos-chat-openai-plugin"
+    generator: str | None = "amalia"                   # a built-in preset, or a chat engine plugin name
     generator_config: dict[str, Any] = field(default_factory=dict)
     api_key: str | None = None                         # bearer token required by the HTTP API, if set
     allow_url_ingest: bool = False                     # let clients make the service fetch a URL
     max_document_bytes: int = 20_000_000
+    sources: list[str] = field(default_factory=list)   # remote sources a request may name, e.g. "pt.wikipedia"
+    user_agent: str = f"evidencia/{__version__} (https://github.com/TigreGotico/evidencia)"
+    source_timeout: float = 10.0                       # seconds for each request to a remote source
+    data_dir: str | None = None                        # keep collections on disk here; in memory when unset
+    embedding_model: str | None = None                 # model2vec model for hybrid retrieval; BM25 only when unset
+    dedupe_threshold: float | None = None              # drop a candidate this similar to one already seen
+    ui: bool = True                                    # serve the demo page at /
 
     def __post_init__(self):
         if isinstance(self.decision, dict):
@@ -57,6 +66,21 @@ class Config:
                 raise ValueError(f"{name} must be an integer of at least 1, got {value!r}")
         if self.api_key == "":
             raise ValueError("api_key is empty; leave it out to run without authentication")
+        from evidencia.sources import CATALOG
+        if not isinstance(self.sources, list) or not all(isinstance(n, str) for n in self.sources):
+            raise ValueError(f"sources must be a list of source names, got {self.sources!r}")
+        unknown = sorted(set(self.sources) - set(CATALOG))
+        if unknown:
+            raise ValueError(f"unknown sources {unknown}; known: {sorted(CATALOG)}")
+        if self.dedupe_threshold is not None:
+            if isinstance(self.dedupe_threshold, bool) or not isinstance(self.dedupe_threshold, (int, float)) \
+                    or not 0.0 < self.dedupe_threshold <= 1.0:
+                raise ValueError(f"dedupe_threshold must be a number in (0, 1], got {self.dedupe_threshold!r}")
+            if not self.embedding_model:
+                raise ValueError("dedupe_threshold needs embedding_model")
+        if isinstance(self.source_timeout, bool) or not isinstance(self.source_timeout, (int, float)) \
+                or self.source_timeout <= 0:
+            raise ValueError(f"source_timeout must be a number of seconds above 0, got {self.source_timeout!r}")
 
     @classmethod
     def load(cls, path: str | None = None, env: dict[str, str] | None = None) -> Config:
@@ -79,6 +103,12 @@ class Config:
                 decision[key] = env[var]
         if env.get("EVIDENCIA_API_KEY"):
             data["api_key"] = env["EVIDENCIA_API_KEY"]
+        if env.get("EVIDENCIA_GENERATOR"):
+            data["generator"] = env["EVIDENCIA_GENERATOR"]
+        if env.get("EVIDENCIA_DATA_DIR"):
+            data["data_dir"] = env["EVIDENCIA_DATA_DIR"]
+        if env.get("EVIDENCIA_SOURCES"):
+            data["sources"] = [n.strip() for n in env["EVIDENCIA_SOURCES"].split(",") if n.strip()]
         return cls(decision=_decision_config(decision), **data)
 
 

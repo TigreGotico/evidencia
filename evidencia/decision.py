@@ -108,7 +108,6 @@ class LocalDecision:
 
     def ask(self, state: Any, questions: dict[str, dict]) -> dict[str, dict]:
         from evidencia._vendor.kev.api import SystemOneRequest, to_answers, to_record
-        from evidencia._vendor.kev.model import admit
 
         try:
             req = SystemOneRequest.model_validate({"state": state, "model": DEFAULT_MODEL, "questions": questions})
@@ -122,6 +121,8 @@ class LocalDecision:
                     self._error = f"{self.run}: {e}"
                     raise DecisionUnavailable(self._error) from e
                 self._error = None
+            # imported after the load, which reports a missing torch as an unavailable backend
+            from evidencia._vendor.kev.model import admit
             tok, model = self._loaded
             rec, meta = to_record(req)
             try:

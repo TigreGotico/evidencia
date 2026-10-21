@@ -61,4 +61,4 @@ Both models can call partial evidence sufficient for a question that needs two f
 `dump` sends fixed requests to a System One server and stores its answers. `check` sends the same requests to the local backend and compares the probabilities. It exits with an error when a probability differs by more than 0.02. With Kev-0.8B in fp32, the local backend and the reference server agree to four decimals. In bf16, they differ by less than 0.01, because the reference server uses CUDA graphs and the local backend does not.
 
 ---
-[← Python](python.md) · [Home](index.md)
+[← Python](python.md) · [Home](index.md) · [Troubleshooting →](troubleshooting.md)

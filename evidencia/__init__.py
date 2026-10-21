@@ -1,11 +1,18 @@
 """Decision gates for retrieval-augmented generation."""
-from evidencia.version import __version__
-from evidencia.config import Config, DecisionConfig
-from evidencia.decision import Decision, DecisionRejected, DecisionUnavailable, HttpDecision, LocalDecision
-from evidencia.gates import Gates, Verdict
-from evidencia.index import Collection, Passage
-from evidencia.pipeline import ContextResult, Evidencia, GeneratorUnavailable
+from importlib import import_module
 
-__all__ = ["__version__", "Config", "DecisionConfig", "Decision", "DecisionRejected", "DecisionUnavailable", "HttpDecision",
-           "LocalDecision", "Gates", "Verdict", "Collection", "Passage", "ContextResult", "Evidencia",
-           "GeneratorUnavailable"]
+from evidencia.version import __version__
+
+# names load on first use, so `evidencia mcp` imports no retrieval or model code and writes nothing to stdout
+_EXPORTS = {"Config": "config", "DecisionConfig": "config", "Decision": "decision", "DecisionRejected": "decision",
+            "DecisionUnavailable": "decision", "HttpDecision": "decision", "LocalDecision": "decision",
+            "Gates": "gates", "Verdict": "gates", "Collection": "index", "Passage": "index",
+            "ContextResult": "pipeline", "Evidencia": "pipeline", "GeneratorUnavailable": "pipeline"}
+
+__all__ = ["__version__", *_EXPORTS]
+
+
+def __getattr__(name: str):
+    if name not in _EXPORTS:
+        raise AttributeError(f"module 'evidencia' has no attribute {name!r}")
+    return getattr(import_module(f"evidencia.{_EXPORTS[name]}"), name)

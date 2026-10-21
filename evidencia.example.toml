@@ -1,9 +1,17 @@
 # Copy to evidencia.toml. docs/configuration.md describes every key.
-generator = "ovos-chat-openai-plugin"
+# Settings without a [section] must come before the first [section] line.
+
+# the chat model that writes answers: AMALIA-9B, served by the "amalia" service in compose.yml
+generator = "amalia"
+
+# keep collections when the service restarts
+data_dir = "/collections"
+
+# public Portuguese sources that a question can name; docs/sources.md gives their licences
+sources = ["pt.wikipedia", "wikidata", "dicionario-aberto"]
 
 [generator_config]
-api_url = "http://host.containers.internal:8000/v1"
-model = "local-model"
+api_url = "http://amalia:8000/v1"
 
 [decision]
 backend = "local"

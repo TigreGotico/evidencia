@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>evidencia</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f6f2; --surface: #ffffff; --text: #1d2023; --muted: #585f66; --border: #d6d9d2;
+  --accent: #2b5d88; --accent-text: #ffffff; --pass: #276b44; --fail: #a33434; --idle: #6b7178;
+  --track: #e4e6e0; --fill: #6d8fae; --mark: #1d2023; --focus: #1a5fd0;
+  --warn-bg: #fff3d1; --warn-border: #b88c12; --mark-bg: #eef3f8;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
+  --radius: 6px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #15171a; --surface: #1e2125; --text: #e5e6e3; --muted: #a3a9b0; --border: #363b41;
+    --accent: #86b4dd; --accent-text: #0f1418; --pass: #74c995; --fail: #f19191; --idle: #9aa1a8;
+    --track: #2c3036; --fill: #5f84a6; --mark: #f2f2ee; --focus: #8fbaff;
+    --warn-bg: #3a3014; --warn-border: #c49b2b; --mark-bg: #232b33;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #15171a; --surface: #1e2125; --text: #e5e6e3; --muted: #a3a9b0; --border: #363b41;
+  --accent: #86b4dd; --accent-text: #0f1418; --pass: #74c995; --fail: #f19191; --idle: #9aa1a8;
+  --track: #2c3036; --fill: #5f84a6; --mark: #f2f2ee; --focus: #8fbaff;
+  --warn-bg: #3a3014; --warn-border: #c49b2b; --mark-bg: #232b33;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 var(--font); overflow-x: hidden; }
+a { color: var(--accent); overflow-wrap: anywhere; }
+h1, h2, h3 { line-height: 1.25; margin: 0 0 var(--s3); }
+h1 { font-size: 1.5rem; } h2 { font-size: 1.15rem; } h3 { font-size: 1rem; }
+p { margin: 0 0 var(--s2); }
+.wrap { max-width: 1280px; margin: 0 auto; padding: var(--s4); }
+header.top { border-bottom: 1px solid var(--border); background: var(--surface); }
+header.top .wrap { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5); align-items: baseline; }
+header.top h1 { margin: 0; }
+.status { color: var(--muted); font-size: .9rem; display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4); }
+.layout { display: grid; gap: var(--s4); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 960px) {
+  .layout { grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); grid-template-rows: auto 1fr; align-items: start; }
+  .ask { grid-column: 1; grid-row: 1; }
+  .docs { grid-column: 1; grid-row: 2; }
+  .results { grid-column: 2; grid-row: 1 / span 2; }
+}
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s4); min-width: 0; }
+.results { display: grid; gap: var(--s4); min-width: 0; }
+label, legend { font-weight: 600; font-size: .95rem; }
+fieldset { border: 0; padding: 0; margin: 0 0 var(--s4); min-width: 0; }
+legend { margin-bottom: var(--s2); padding: 0; }
+.field { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s1); margin-bottom: var(--s3); }
+input[type="text"], input[type="password"], select, textarea {
+  width: 100%; font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s2); min-height: 40px;
+}
+textarea { resize: vertical; }
+input[type="file"] { font: inherit; width: 100%; min-width: 0; }
+.check { display: flex; gap: var(--s2); align-items: flex-start; padding: var(--s1) 0; font-weight: 400; }
+.check input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; }
+.check small { display: block; color: var(--muted); }
+button { font: inherit; min-height: 40px; min-width: 40px; padding: var(--s2) var(--s4); border-radius: var(--radius);
+  border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); cursor: pointer; }
+button.quiet { background: transparent; color: var(--accent); }
+button:disabled { opacity: .55; cursor: not-allowed; }
+.row { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.examples button { min-height: 32px; padding: var(--s1) var(--s3); font-size: .9rem; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.hint { color: var(--muted); font-size: .9rem; }
+.banner { border: 1px solid var(--warn-border); background: var(--warn-bg); border-radius: var(--radius); padding: var(--s3); }
+.banner strong { display: block; }
+.tag { display: inline-flex; align-items: center; gap: var(--s1); font-size: .85rem; font-weight: 600; white-space: nowrap;
+  border: 1px solid currentColor; border-radius: 999px; padding: 0 var(--s2); }
+.tag.pass { color: var(--pass); } .tag.fail { color: var(--fail); } .tag.idle { color: var(--idle); }
+.tag.research { color: var(--warn-border); }
+.gauge { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2); align-items: center; margin: var(--s1) 0; }
+.gauge-track { position: relative; height: 10px; background: var(--track); border-radius: 5px; }
+.gauge-fill { position: absolute; inset: 0 auto 0 0; background: var(--fill); border-radius: 5px; transition: width .3s ease; }
+.gauge-mark { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--mark); }
+.gauge-text { font: .85rem var(--mono); white-space: nowrap; }
+.gate { border-top: 1px solid var(--border); padding-top: var(--s3); margin-top: var(--s3); }
+.gate-head { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; justify-content: space-between; }
+ol.cands, ol.evidence { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+.cand, .ev { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s2) var(--s3); background: var(--bg); min-width: 0; }
+.cand.dropped { opacity: .8; }
+.cand.kept, .ev { border-left: 4px solid var(--pass); }
+.cand.dropped { border-left: 4px dashed var(--fail); }
+.cand-head { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); align-items: center; font-size: .9rem; }
+.cand-head .meta { color: var(--muted); overflow-wrap: anywhere; }
+.passage { margin: var(--s1) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .95rem; }
+.attr { color: var(--muted); font-size: .85rem; margin: var(--s1) 0 0; overflow-wrap: anywhere; }
+details summary { cursor: pointer; color: var(--accent); font-size: .9rem; min-height: 24px; }
+.ev:target { background: var(--mark-bg); outline: 2px solid var(--accent); }
+.verdict { font-size: 1.05rem; }
+.answer { font-size: 1.1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chip { display: inline-block; min-width: 24px; min-height: 24px; padding: 0 var(--s1); margin: 0 2px; text-align: center;
+  border: 1px solid var(--accent); border-radius: var(--radius); font: .85rem/22px var(--mono); text-decoration: none; }
+.chip:hover { background: var(--mark-bg); }
+.round + .round { margin-top: var(--s4); }
+.timings { font: .8rem var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.coll-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+.coll-list li { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; justify-content: space-between;
+  border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s2); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+[hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <h1>evidencia</h1>
+    <p class="hint" style="margin:0">Decision-gated answers for European Portuguese. Watch each gate decide.</p>
+    <div class="status" id="status"><span>Connecting…</span></div>
+  </div>
+</header>
+
+<div class="wrap">
+  <section class="panel banner" id="auth" hidden aria-labelledby="auth-title" style="margin-bottom: var(--s4)">
+    <h2 id="auth-title">Access token</h2>
+    <p>This server needs a token. The page keeps it in this browser only.</p>
+    <form id="auth-form" class="row">
+      <label class="sr-only" for="token">Token</label>
+      <input type="password" id="token" autocomplete="off" placeholder="Bearer token" style="flex:1 1 200px">
+      <button type="submit">Save token</button>
+      <button type="button" class="quiet" id="token-clear">Forget token</button>
+    </form>
+  </section>
+
+  <main class="layout">
+    <section class="panel ask" aria-labelledby="ask-title">
+      <h2 id="ask-title">Ask</h2>
+      <form id="ask-form">
+        <div class="field">
+          <label for="question">Question (pt-PT)</label>
+          <textarea id="question" rows="3" required placeholder="Qual é a capital de Portugal?"></textarea>
+        </div>
+        <div class="row examples" role="group" aria-label="Example questions" style="margin-bottom: var(--s4)">
+          <button type="button" class="quiet">Qual é a capital de Portugal?</button>
+          <button type="button" class="quiet">Quando foi construída a Torre de Belém?</button>
+          <button type="button" class="quiet">O que significa saudade?</button>
+        </div>
+        <div class="field">
+          <label for="collection">Collection</label>
+          <select id="collection"><option value="">None</option></select>
+        </div>
+        <fieldset>
+          <legend>Remote sources</legend>
+          <div id="sources"><p class="hint">Loading…</p></div>
+        </fieldset>
+        <p class="hint" id="no-generator" hidden>This server has no generator. The page runs the context gates only and shows the evidence, not an answer.</p>
+        <div class="row">
+          <button type="submit" id="ask-btn">Ask</button>
+          <button type="button" class="quiet" id="stop-btn" hidden>Stop</button>
+        </div>
+        <p class="hint" id="ask-msg" role="alert"></p>
+      </form>
+    </section>
+
+    <section class="results" aria-labelledby="results-title">
+      <h2 id="results-title" class="sr-only">Results</h2>
+      <p id="live" class="hint" aria-live="polite" aria-atomic="true" style="margin:0">Ask a question to start.</p>
+      <div id="banners" class="results" hidden></div>
+      <section class="panel" id="outcome" hidden aria-labelledby="outcome-title">
+        <h2 id="outcome-title">Outcome</h2>
+        <div id="outcome-body"></div>
+      </section>
+      <section class="panel" id="evidence-panel" hidden aria-labelledby="evidence-title">
+        <h2 id="evidence-title">Evidence</h2>
+        <ol class="evidence" id="evidence"></ol>
+      </section>
+      <section class="panel" id="trace-panel" hidden aria-labelledby="trace-title">
+        <h2 id="trace-title">Gate trace</h2>
+        <div id="trace"></div>
+      </section>
+    </section>
+
+    <section class="panel docs" aria-labelledby="docs-title">
+      <h2 id="docs-title">Documents</h2>
+      <p class="hint">Add text or a file to a collection. A new name makes a new collection.</p>
+      <form id="doc-form">
+        <div class="field">
+          <label for="doc-collection">Collection name</label>
+          <input type="text" id="doc-collection" required autocomplete="off" placeholder="my-notes">
+        </div>
+        <div class="field">
+          <label for="doc-source">Document name (for pasted text)</label>
+          <input type="text" id="doc-source" autocomplete="off" placeholder="notes.txt (re-using a name replaces it)">
+        </div>
+        <div class="field">
+          <label for="doc-format">Format</label>
+          <select id="doc-format">
+            <option value="text">Plain text</option><option value="markdown">Markdown</option><option value="html">HTML</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="doc-text">Text</label>
+          <textarea id="doc-text" rows="5"></textarea>
+        </div>
+        <div class="row" style="margin-bottom: var(--s4)"><button type="submit">Add text</button></div>
+        <div class="field">
+          <label for="doc-file">Or upload a file (.txt, .md, .html, .pdf)</label>
+          <input type="file" id="doc-file" accept=".txt,.md,.markdown,.html,.htm,.pdf">
+        </div>
+        <div class="row"><button type="button" id="upload-btn">Upload file</button></div>
+        <p class="hint" id="doc-msg" aria-live="polite"></p>
+      </form>
+      <h3>Collections</h3>
+      <ul class="coll-list" id="collections"><li class="hint">None yet.</li></ul>
+    </section>
+  </main>
+</div>
+
+<script>
+"use strict";
+
+const TOKEN_KEY = "evidencia.token";
+const CITATION = /\s*\[(\d+(?:\s*,\s*\d+)*)\]/g;
+const GATE_HELP = {
+  retrieve: "No source returned a passage for this question.",
+  select: "No passage passed the select gate, so there was no evidence to use.",
+  sufficient: "The kept evidence was not enough to answer, also after a wider search.",
+  grounded: "The draft answer states facts that the evidence does not support, so the service withheld it.",
+};
+const app = { status: null, catalog: {}, generate: true, controller: null, trace: null, collectionsLoaded: false };
+
+/* ---------- small helpers ---------- */
+
+function storageGet(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+function storageSet(key, value) {
+  try { value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value); } catch (e) { /* storage blocked */ }
+}
+
+// Builds an element. Strings among the children become text nodes, so server text is never parsed as HTML.
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [name, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined || value === false) continue;
+    if (name === "text") node.textContent = value;
+    else node.setAttribute(name, value === true ? "" : value);
+  }
+  for (const child of children.flat()) {
+    if (child === null || child === undefined || child === false) continue;
+    node.append(typeof child === "string" ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+function $(id) { return document.getElementById(id); }
+function safeUrl(url) { return typeof url === "string" && /^https?:\/\//i.test(url) ? url : null; }
+function external(url, label) {
+  const href = safeUrl(url);
+  return href ? el("a", { href, target: "_blank", rel: "noopener noreferrer" }, label) : el("span", {}, label);
+}
+function fmt(p) { return typeof p === "number" ? p.toFixed(2) : "–"; }
+function announce(text) { $("live").textContent = text; }
+function key(p) { return `${p.origin}\u0000${p.id}`; }
+
+function detailText(detail) {
+  if (Array.isArray(detail)) return detail.map(d => (d && d.msg) || String(d)).join("; ");
+  return typeof detail === "string" ? detail : "request failed";
+}
+
+/* ---------- API ---------- */
+
+class ApiError extends Error {
+  constructor(status, detail) { super(detailText(detail)); this.status = status; }
+}
+
+function authHeaders(extra) {
+  const headers = Object.assign({}, extra);
+  const token = storageGet(TOKEN_KEY);
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
+
+async function request(path, options) {
+  const opts = Object.assign({}, options);
+  opts.headers = authHeaders(opts.headers);
+  const res = await fetch(path, opts);
+  if (res.status === 401) showAuth();
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail; } catch (e) { /* body is not JSON */ }
+    throw new ApiError(res.status, detail);
+  }
+  return res;
+}
+async function getJson(path) { return (await request(path)).json(); }
+async function sendJson(path, method, body) {
+  const res = await request(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return res.json();
+}
+
+function showAuth() {
+  $("auth").hidden = false;
+  $("token").focus();
+}
+
+/* ---------- start-up ---------- */
+
+async function loadHealth() {
+  const box = $("status");
+  try {
+    const h = await (await fetch("/health")).json();
+    box.replaceChildren(el("span", {}, `v${h.version}`),
+      el("span", {}, h.decision_reachable ? "Decision model: reachable" : "Decision model: not reachable"));
+  } catch (e) {
+    box.replaceChildren(el("span", {}, "Server not reachable"));
+  }
+}
+
+async function loadStatus() {
+  const s = await getJson("/v1/status");
+  app.status = s;
+  app.generate = Boolean(s.generator_configured);
+  $("no-generator").hidden = app.generate;
+  const t = s.thresholds;
+  const r = s.retrieval;
+  $("status").append(
+    el("span", {}, `Generator: ${app.generate ? s.generator || "configured" : "none"}`),
+    el("span", {}, `Retrieval: ${r.n_candidates} candidates per source, doubling over ${r.max_rounds} rounds, top ${r.top_k} kept` +
+      `${r.hybrid ? ", hybrid" : ", BM25"}${r.dedupe_threshold ? `, near-duplicates over ${fmt(r.dedupe_threshold)} dropped` : ""}`),
+    el("span", {}, `Thresholds: select ${fmt(t.select)}, sufficient ${fmt(t.sufficient)}, grounded ${fmt(t.grounded)}`),
+    el("span", {}, s.fail_open ? "Gates fail open" : "Gates fail closed"));
+}
+
+function sourceLabel(src) {
+  const parts = [el("span", {}, src.title || src.name), " ",
+    el("small", {}, `${src.name} · licence: ${src.licence}`)];
+  if (src.commercial === false) parts.push(el("small", {}, el("span", { class: "tag research" }, "⚠ research use only")));
+  const home = safeUrl(src.homepage);
+  if (home) parts.push(el("small", {}, external(home, "Homepage")));
+  return parts;
+}
+
+async function loadSources() {
+  const box = $("sources");
+  const data = await getJson("/v1/sources");
+  app.catalog = {};
+  const enabled = [], disabled = [];
+  for (const src of data.sources) {
+    app.catalog[src.name] = src;
+    const input = el("input", { type: "checkbox", name: "source", value: src.name, disabled: !src.enabled });
+    (src.enabled ? enabled : disabled).push(el("label", { class: "check" }, input, el("span", {}, sourceLabel(src))));
+  }
+  box.replaceChildren(...(enabled.length ? enabled : [el("p", { class: "hint" }, "This server queries no remote sources.")]));
+  if (disabled.length) {
+    box.append(el("details", {}, el("summary", {}, `Not enabled on this server (${disabled.length})`), disabled));
+  }
+}
+
+async function loadCollections(select) {
+  const data = await getJson("/v1/collections");
+  const picker = $("collection");
+  const previous = select || picker.value;
+  const names = Object.keys(data).sort();
+  picker.replaceChildren(el("option", { value: "" }, "None"), ...names.map(n => el("option", { value: n }, n)));
+  // keep the reader's choice, "None" included; pick the first collection on start-up or when the chosen one is gone
+  if (names.includes(previous) || (previous === "" && app.collectionsLoaded)) picker.value = previous;
+  else picker.value = names[0] || "";
+  app.collectionsLoaded = true;
+  const list = $("collections");
+  if (!names.length) { list.replaceChildren(el("li", { class: "hint" }, "None yet.")); return; }
+  list.replaceChildren(...names.map(name => {
+    const info = data[name];
+    const remove = el("button", { type: "button", class: "quiet", "aria-label": `Delete collection ${name}` }, "Delete");
+    remove.addEventListener("click", () => deleteCollection(name));
+    return el("li", {}, el("span", {}, el("strong", {}, name), ` · ${info.passages} passages · ${info.sources.length} documents`), remove);
+  }));
+}
+
+async function init() {
+  $("auth").hidden = true;
+  await loadHealth();
+  try {
+    await loadStatus();
+    await Promise.all([loadSources(), loadCollections()]);
+  } catch (e) {
+    $("ask-msg").textContent = e.status === 401 ? "Enter the access token to continue." : `Could not load the server state: ${e.message}`;
+  }
+}
+
+/* ---------- documents ---------- */
+
+function docTarget() {
+  const name = $("doc-collection").value.trim();
+  if (!name) { $("doc-msg").textContent = "Give a collection name."; $("doc-collection").focus(); }
+  return name;
+}
+
+async function afterIngest(promise, name) {
+  const msg = $("doc-msg");
+  msg.textContent = "Adding…";
+  try {
+    const r = await promise;
+    msg.textContent = `Added ${r.passages} passages from “${r.source}” to ${r.collection} (${r.total} in total).`;
+    await loadCollections(name);
+  } catch (e) {
+    msg.textContent = `Could not add the document: ${e.message}`;
+  }
+}
+
+function addText(event) {
+  event.preventDefault();
+  const name = docTarget();
+  if (!name) return;
+  const text = $("doc-text").value;
+  if (!text.trim()) { $("doc-msg").textContent = "Paste some text first."; return; }
+  const source = $("doc-source").value.trim() || "pasted text";
+  const path = `/v1/collections/${encodeURIComponent(name)}/documents`;
+  afterIngest(sendJson(path, "POST", { source, text, format: $("doc-format").value }), name);
+}
+
+function uploadFile() {
+  const name = docTarget();
+  if (!name) return;
+  const file = $("doc-file").files[0];
+  if (!file) { $("doc-msg").textContent = "Choose a file first."; return; }
+  const form = new FormData();
+  form.append("file", file);
+  const path = `/v1/collections/${encodeURIComponent(name)}/files`;
+  afterIngest(request(path, { method: "POST", body: form }).then(r => r.json()), name);
+}
+
+async function deleteCollection(name) {
+  if (!confirm(`Delete the collection “${name}” and all its documents?`)) return;
+  try {
+    await request(`/v1/collections/${encodeURIComponent(name)}`, { method: "DELETE" });
+    $("doc-msg").textContent = `Deleted ${name}.`;
+    await loadCollections();
+  } catch (e) {
+    $("doc-msg").textContent = `Could not delete ${name}: ${e.message}`;
+  }
+}
+
+/* ---------- shared view parts ---------- */
+
+// A probability bar with a threshold marker. The verdict is also given as text, never by colour alone.
+function gauge(p, threshold, label) {
+  const fill = el("div", { class: "gauge-fill" });
+  const mark = el("div", { class: "gauge-mark", title: `threshold ${fmt(threshold)}` });
+  fill.style.width = typeof p === "number" ? `${Math.round(p * 100)}%` : "0";
+  mark.style.left = `${Math.round(threshold * 100)}%`;
+  const track = el("div", { class: "gauge-track", "aria-hidden": "true" }, fill, mark);
+  const text = typeof p === "number" ? `p ${fmt(p)} ${p >= threshold ? "≥" : "<"} ${fmt(threshold)}` : `no p · threshold ${fmt(threshold)}`;
+  return el("div", { class: "gauge", role: "img", "aria-label": `${label}: ${text}` }, track, el("span", { class: "gauge-text" }, text));
+}
+
+function tag(kind, text) { return el("span", { class: `tag ${kind}` }, text); }
+
+function attribution(p) {
+  const src = app.catalog[p.origin];
+  if (!src) {
+    return el("p", { class: "attr" }, "Document ", p.url ? external(p.url, p.source) : el("strong", {}, p.source),
+      ` · collection ${p.origin}`);
+  }
+  const parts = ["From ", p.url ? external(p.url, p.source) : el("strong", {}, p.source), " · ",
+    external(src.homepage, src.title || src.name), ` · licence: ${src.licence}`];
+  if (src.commercial === false) parts.push(" ", tag("research", "⚠ research use only"));
+  return el("p", { class: "attr" }, parts);
+}
+
+function passageText(text) {
+  const limit = 320;
+  if (text.length <= limit) return el("p", { class: "passage" }, text);
+  const cut = text.lastIndexOf(" ", limit);
+  const short = text.slice(0, cut > 200 ? cut : limit) + " …";
+  const more = el("details", {}, el("summary", {}, "Show the full passage"), el("p", { class: "passage" }, text));
+  return el("div", {}, el("p", { class: "passage" }, short), more);
+}
+
+// Answer text with every [n] turned into a link to evidence n. Numbers that name no passage stay as text.
+function withCitations(text, count) {
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(CITATION)) {
+    out.push(text.slice(last, m.index));
+    const nums = m[1].split(",").map(n => parseInt(n, 10));
+    if (nums.every(n => n >= 1 && n <= count)) {
+      out.push(" ", ...nums.map(n => el("a", { class: "chip", href: `#ev-${n}`, "aria-label": `evidence ${n}` }, `${n}`)));
+    } else {
+      out.push(m[0]);
+    }
+    last = m.index + m[0].length;
+  }
+  out.push(text.slice(last));
+  return out;
+}
+
+/* ---------- the live trace ---------- */
+
+function newTrace() {
+  app.trace = { rounds: new Map(), rows: new Map(), evidence: [], draft: null };
+  $("trace").replaceChildren();
+  $("evidence").replaceChildren();
+  $("outcome-body").replaceChildren();
+  $("banners").replaceChildren();
+  $("banners").hidden = true;
+  $("outcome").hidden = true;
+  $("evidence-panel").hidden = true;
+  $("trace-panel").hidden = false;
+}
+
+function roundView(round) {
+  let view = app.trace.rounds.get(round);
+  if (view) return view;
+  const r = app.status.retrieval;
+  const wider = round > 1 ? " · wider search" : "";
+  const title = `Round ${round} of ${r.max_rounds}${wider} · up to ${r.n_candidates * 2 ** (round - 1)} per source`;
+  const list = el("ol", { class: "cands" });
+  const gates = el("div", {});
+  const section = el("section", { class: "round", "aria-label": title },
+    el("h3", {}, title), el("p", { class: "hint" }, "Select gate: does this passage help answer the question?"), list, gates);
+  $("trace").append(section);
+  view = { list, gates, count: 0 };
+  app.trace.rounds.set(round, view);
+  return view;
+}
+
+function candidateRow(p) {
+  const status = el("span", {}, tag("idle", "… scoring"));
+  const meter = el("div", {}, gauge(null, app.status.thresholds.select, "select"));
+  const score = typeof p.score === "number" ? ` · retrieval score ${p.score.toFixed(2)}` : "";
+  const li = el("li", { class: "cand" },
+    el("div", { class: "cand-head" }, status, el("span", { class: "meta" }, `${p.source}${score}`)),
+    meter, passageText(p.text), attribution(p));
+  return { li, status, meter, p: undefined };
+}
+
+function onCandidates(data) {
+  const view = roundView(data.round);
+  for (const p of data.passages) {
+    const row = candidateRow(p);
+    app.trace.rows.set(key(p), row);
+    view.list.append(row.li);
+  }
+  view.count += data.passages.length;
+  if (!data.passages.length) view.list.append(el("li", { class: "hint" }, "No new passages in this round."));
+  announce(`Round ${data.round}: ${data.passages.length} new candidate passages. Scoring them.`);
+}
+
+function setRowState(row, inEvidence) {
+  const thr = app.status.thresholds.select;
+  row.li.classList.remove("kept", "dropped");
+  if (row.p === null) {
+    row.status.replaceChildren(tag("fail", "⊘ refused by the model"));
+    row.li.classList.add("dropped");
+  } else if (row.p < thr) {
+    row.status.replaceChildren(tag("fail", "✗ dropped"));
+    row.li.classList.add("dropped");
+  } else if (inEvidence === false) {
+    row.status.replaceChildren(tag("idle", `✓ passed · not kept (top ${app.status.retrieval.top_k} limit)`));
+  } else {
+    row.status.replaceChildren(tag("pass", inEvidence ? "✓ kept as evidence" : "✓ passed"));
+    row.li.classList.add("kept");
+  }
+}
+
+function onSelect(data) {
+  const row = app.trace.rows.get(key(data));
+  if (!row) return;
+  row.p = data.p_select;
+  row.meter.replaceChildren(gauge(data.p_select, app.status.thresholds.select, "select"));
+  setRowState(row, undefined);
+  announce(`Scored “${data.source}”: ${row.p === null ? "refused" : fmt(row.p)}.`);
+}
+
+function evidenceItem(p, n) {
+  const head = el("div", { class: "cand-head" }, el("strong", {}, `[${n}]`), tag("pass", "✓ evidence"),
+    el("span", { class: "meta" }, `p(select) ${fmt(p.p_select)}`));
+  return el("li", { class: "ev", id: `ev-${n}`, tabindex: "-1" }, head, passageText(p.text), attribution(p));
+}
+
+function renderEvidence(passages) {
+  app.trace.evidence = passages;
+  $("evidence-panel").hidden = false;
+  $("evidence").replaceChildren(...(passages.length ? passages.map((p, i) => evidenceItem(p, i + 1))
+    : [el("li", { class: "hint" }, "No passage is kept.")]));
+}
+
+function onEvidence(data) {
+  const kept = new Set(data.passages.map(key));
+  for (const [k, row] of app.trace.rows) if (row.p !== undefined) setRowState(row, kept.has(k));
+  renderEvidence(data.passages);
+  roundView(data.round).gates.append(el("p", { class: "hint gate" }, `Evidence after round ${data.round}: ${data.passages.length} passages.`));
+  announce(`Round ${data.round}: ${data.passages.length} passages kept as evidence.`);
+}
+
+function gateBlock(title, question, verdict, passText, failText) {
+  return el("div", { class: "gate" },
+    el("div", { class: "gate-head" }, el("strong", {}, title), verdict.passed ? tag("pass", `✓ ${passText}`) : tag("fail", `✗ ${failText}`)),
+    el("p", { class: "hint" }, question), gauge(verdict.p, verdict.threshold, title));
+}
+
+const SKIPPED = {
+  "no evidence": "Not asked: there is no evidence to judge.",
+  "same evidence": "Not asked again: the evidence is the same as in the round before. The earlier verdict stands.",
+};
+
+function onSufficient(data) {
+  const gates = roundView(data.round).gates;
+  if (data.skipped && typeof data.p !== "number") {
+    gates.append(el("div", { class: "gate" }, el("div", { class: "gate-head" }, el("strong", {}, "Sufficient"), tag("idle", "– skipped")),
+      el("p", { class: "hint" }, SKIPPED[data.skipped] || `Not asked: ${data.skipped}.`)));
+    announce(`Sufficiency in round ${data.round}: skipped.`);
+    return;
+  }
+  const block = gateBlock("Sufficient", "Is the kept evidence enough to answer?", data, "enough", "not enough");
+  if (data.skipped) block.append(el("p", { class: "hint" }, SKIPPED[data.skipped] || `Not asked again: ${data.skipped}.`));
+  gates.append(block);
+  announce(`Sufficiency in round ${data.round}: ${data.passed ? "enough" : "not enough"} (${fmt(data.p)}).`);
+}
+
+// fail open: the gated trace so far is void; the service answers from these unscored candidates
+function onGatesUnavailable(data) {
+  app.trace.rounds = new Map();
+  app.trace.rows = new Map();
+  const list = el("ol", { class: "cands" });
+  for (const p of data.candidates) {
+    const row = candidateRow(p);
+    row.status.replaceChildren(tag("idle", "– not scored"));
+    row.meter.replaceChildren();
+    list.append(row.li);
+  }
+  if (!data.candidates.length) list.append(el("li", { class: "hint" }, "No passages."));
+  $("trace").replaceChildren(el("section", { class: "round", "aria-label": "Ungated retrieval" },
+    el("h3", {}, "Ungated retrieval"),
+    el("p", { class: "hint" }, "The decision model is unreachable. No gate ran. These passages are used as they are."), list));
+  announce("The decision model is unreachable. Continuing without gates.");
+}
+
+function onDraft(data) {
+  app.trace.draft = data.draft;
+  $("trace").append(el("section", { class: "round gate", "aria-label": "Draft" }, el("h3", {}, "Draft answer"),
+    el("p", { class: "answer" }, withCitations(data.draft, app.trace.evidence.length))));
+  announce("The generator wrote a draft. Checking that it is grounded.");
+}
+
+function onGrounded(data) {
+  $("trace").append(gateBlock("Grounded", "Is every fact in the draft supported by the evidence?", data, "grounded", "not grounded"));
+  announce(`Grounding: ${data.passed ? "passed" : "failed"} (${fmt(data.p)}).`);
+}
+
+/* ---------- the final result ---------- */
+
+function banner(title, text) {
+  $("banners").hidden = false;
+  $("banners").append(el("div", { class: "banner", role: "status" }, el("strong", {}, `⚠ ${title}`), text));
+}
+
+function outcomeBody(r, gate) {
+  const body = [];
+  if (gate) {
+    body.push(el("p", { class: "verdict" }, tag("fail", "✗ Abstained"), " ", el("strong", {}, `at the ${gate} gate`)),
+      el("p", {}, GATE_HELP[gate] || ""));
+    if (r.message) body.push(el("p", { class: "hint", lang: "pt-PT" }, `Service message: ${r.message}`));
+    if (r.draft) body.push(el("h3", {}, "Withheld draft"), el("p", { class: "answer hint", lang: "pt-PT" }, withCitations(r.draft, r.evidence.length)));
+  } else if ("answer" in r) {
+    body.push(el("p", { class: "verdict" }, tag("pass", "✓ Answered"), r.gates === "applied" ? " · every gate passed" : " · not every gate ran"),
+      el("p", { class: "answer", lang: "pt-PT" }, withCitations(r.answer || "", r.evidence.length)));
+    if (r.cited && r.cited.length) body.push(el("p", { class: "hint" }, "Cites: ", r.cited.map(n => el("a", { class: "chip", href: `#ev-${n}` }, `${n}`))));
+  } else {
+    body.push(el("p", { class: "verdict" }, tag("pass", "✓ Context ready")),
+      el("p", {}, `No answer was generated. The evidence below is what an answer would use (${r.evidence.length} passages).`));
+  }
+  return body;
+}
+
+function onResult(r) {
+  renderEvidence(r.evidence);
+  if (r.gates === "unavailable") banner("Gates not applied", "The decision model was unreachable, so the service answered without gates (fail open). Treat the output as unchecked.");
+  if (r.gates === "partial") banner("Grounding not checked", "The decision model was unreachable for the grounding check. The answer is not checked against the evidence.");
+  const failed = (r.sources || []).filter(s => s.error);
+  if (failed.length) banner("A source failed", failed.map(s => `${s.name}: ${s.error}`).join("; "));
+  const gate = r.abstained_at;
+  const timings = Object.entries(r.timings_ms || {}).map(([k, v]) => `${k} ${Math.round(v)} ms`).join(" · ");
+  const counts = (r.sources || []).map(s => `${s.name} (${s.kind}): ${s.candidates} candidates` +
+    (s.duplicates > 0 ? `, ${s.duplicates} near-duplicates dropped` : "")).join(" · ");
+  $("outcome-body").replaceChildren(...outcomeBody(r, gate),
+    el("p", { class: "timings" }, `Rounds ${r.rounds} · ${counts}`), el("p", { class: "timings" }, timings));
+  $("outcome").hidden = false;
+  announce(gate ? `Abstained at the ${gate} gate.` : "Done.");
+}
+
+function onError(data) {
+  const body = [el("p", { class: "verdict" }, tag("fail", "✗ Error"), ` ${data.status}`), el("p", { class: "answer" }, data.detail)];
+  if (data.status === 502) {
+    // a 502 detail is a plain sentence about the chat model, written for the reader
+    const retry = el("button", { type: "button", class: "quiet" }, "Ask without generating");
+    retry.addEventListener("click", () => ask(null, false));
+    body.push(el("p", { class: "row" }, "The gates can still run:", retry));
+  }
+  $("outcome-body").replaceChildren(...body);
+  $("outcome").hidden = false;
+  announce(`The request failed: ${data.detail}`);
+}
+
+const HANDLERS = { candidates: onCandidates, select: onSelect, evidence: onEvidence, sufficient: onSufficient,
+  gates_unavailable: onGatesUnavailable, draft: onDraft, grounded: onGrounded, result: onResult, error: onError };
+
+/* ---------- streaming ---------- */
+
+function dispatchBlock(block) {
+  let name = "message";
+  const data = [];
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event:")) name = line.slice(6).trim();
+    else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+  }
+  const handler = HANDLERS[name];
+  if (handler && data.length) handler(JSON.parse(data.join("\n")));
+}
+
+async function readStream(res) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+    let end;
+    while ((end = buffer.indexOf("\n\n")) >= 0) {
+      dispatchBlock(buffer.slice(0, end));
+      buffer = buffer.slice(end + 2);
+    }
+  }
+  if (buffer.trim()) dispatchBlock(buffer);
+}
+
+function setRunning(running) {
+  $("ask-btn").disabled = running;
+  $("stop-btn").hidden = !running;
+}
+
+async function ask(event, generate = app.generate) {
+  if (event) event.preventDefault();
+  const msg = $("ask-msg");
+  msg.textContent = "";
+  if (!app.status) { msg.textContent = "The server state is not loaded yet."; return; }
+  const question = $("question").value.trim();
+  const collection = $("collection").value || null;
+  const sources = [...document.querySelectorAll('input[name="source"]:checked')].map(i => i.value);
+  if (!question) { msg.textContent = "Type a question."; $("question").focus(); return; }
+  if (!collection && !sources.length) { msg.textContent = "Choose a collection, a remote source, or both."; return; }
+  newTrace();
+  announce("Retrieving passages…");
+  app.controller = new AbortController();
+  setRunning(true);
+  try {
+    const res = await request("/v1/answer/stream", { method: "POST", signal: app.controller.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, collection, sources, generate }) });
+    await readStream(res);
+  } catch (e) {
+    if (e.name === "AbortError") announce("Stopped.");
+    else onError({ status: e.status || "network", detail: e.message });
+  } finally {
+    setRunning(false);
+    app.controller = null;
+  }
+}
+
+/* ---------- wiring ---------- */
+
+$("ask-form").addEventListener("submit", ask);
+$("stop-btn").addEventListener("click", () => app.controller && app.controller.abort());
+for (const button of document.querySelectorAll(".examples button")) {
+  button.addEventListener("click", () => { $("question").value = button.textContent; ask(); });
+}
+$("doc-form").addEventListener("submit", addText);
+$("upload-btn").addEventListener("click", uploadFile);
+$("auth-form").addEventListener("submit", event => {
+  event.preventDefault();
+  const token = $("token").value.trim();
+  if (!token) return;
+  storageSet(TOKEN_KEY, token);
+  $("token").value = "";
+  init();
+});
+$("token-clear").addEventListener("click", () => { storageSet(TOKEN_KEY, null); $("token").value = ""; });
+init();
+</script>
+</body>
+</html>
