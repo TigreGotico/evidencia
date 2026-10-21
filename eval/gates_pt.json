@@ -1,5 +1,5 @@
 {
-  "about": "pt-PT gate cases. Labels follow from the passage text: a passage helps when it states the fact asked; evidence is sufficient when it states every fact the answer needs; an answer is grounded when every fact in it is stated in the evidence. Labelled by hand by the author of the cases; not reviewed by a second person. The hard cases defeat word overlap: wrong answers reuse words of the evidence, unanswerable questions use only words the evidence contains, and answerable questions are paraphrased.",
+  "about": "pt-PT gate cases. Labels follow from the passage text: a passage helps when it states the fact asked; evidence is sufficient when it states every fact the answer needs; an answer is grounded when every fact in it is stated in the evidence. Labelled by hand by the author of the cases; not reviewed by a second person. The hard cases defeat word overlap: wrong answers reuse words of the evidence, unanswerable questions use mostly words the evidence contains, and answerable questions are paraphrased.",
   "corpus": {
     "c1": "Lisboa é a capital de Portugal e a maior cidade do país.",
     "c2": "O rio Tejo nasce em Espanha, na serra de Albarracín, e desagua no oceano Atlântico, em Lisboa.",

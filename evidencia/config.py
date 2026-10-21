@@ -13,7 +13,7 @@ class DecisionConfig:
     url: str = "http://127.0.0.1:8008"   # http: a server implementing POST /v1/systemone
     key: str | None = None               # http: bearer token, if the server requires one
     model: str = "kev-latest"            # http: model name sent in each request
-    run: str = "jaredpalmer/kev-0.8b"    # local: Hub id or run directory of the checkpoint
+    run: str = "TigreGotico/jevasio-0.8b-v2"   # local: Hub id or run directory of the checkpoint
     device: str = "auto"                 # local: auto, cpu, cuda or mps
     dtype: str | None = None             # local: bf16 or fp32; default bf16 on CUDA, fp32 elsewhere
     timeout: float = 30.0

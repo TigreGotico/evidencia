@@ -79,7 +79,7 @@ class HttpDecision:
 
 
 class LocalDecision:
-    """A Kev-family checkpoint (a Hub id such as ``jaredpalmer/kev-0.8b`` or a local run directory) in this process.
+    """A Kev-family checkpoint (a Hub id such as ``TigreGotico/jevasio-0.8b-v2`` or a local run directory) in this process.
 
     Needs the ``local`` extra. The checkpoint loads on first use, so constructing this is cheap.
     """

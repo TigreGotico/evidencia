@@ -1,6 +1,6 @@
 """Score the three gates on eval/gates_pt.json, for one decision model and for a lexical baseline.
 
-    python scripts/gate_eval.py jaredpalmer/kev-0.8b results.json
+    python scripts/gate_eval.py TigreGotico/jevasio-0.8b-v2 results.json
 
 The baseline needs no model: BM25 score for select, the share of question words found in the evidence for
 sufficiency, and the share of answer words found in the evidence for grounding. AUROC is threshold-free. The

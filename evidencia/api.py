@@ -96,9 +96,8 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
             raise HTTPException(413, f"document larger than {config.max_document_bytes} bytes")
 
     def ingest(name: str, source: str, content: str | bytes, fmt: str) -> dict:
-        col = engine.collection(name, create=True)
         try:
-            added = col.add(content, source, fmt)
+            col, added = engine.add_document(name, content, source, fmt)
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
         return {"collection": name, "source": source, "passages": len(added), "total": len(col.passages)}
@@ -163,8 +162,9 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
             raise HTTPException(502, "could not fetch the URL") from None
         if doc.format == "pdf":
             return ingest(name, doc.source, bytes(data), doc.format)
+        charset = resp.headers.get("content-type", "").partition("charset=")[2].split(";")[0].strip(' "')
         try:
-            text = data.decode(resp.encoding or "utf-8")
+            text = data.decode(charset or "utf-8")
         except (LookupError, UnicodeDecodeError):
             raise HTTPException(422, "the URL did not return text in its declared encoding") from None
         return ingest(name, doc.source, text, doc.format)
@@ -203,7 +203,7 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
     def retrieve(body: RetrieveIn):
         hits = collection_or_404(body.collection).search(body.question, body.k)
         try:
-            scored = [{**p.__dict__, "p_select": engine.gates.select(body.question, p.text)} for p in hits]
+            scored = [{**p.__dict__, "p_select": engine.select(body.question, p)} for p in hits]
             gates = "applied"
         except DecisionUnavailable:
             if not config.fail_open:

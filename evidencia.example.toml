@@ -1,4 +1,4 @@
-# Copy to evidencia.toml. Every key is described in the README.
+# Copy to evidencia.toml. docs/configuration.md describes every key.
 generator = "ovos-chat-openai-plugin"
 
 [generator_config]
@@ -7,5 +7,5 @@ model = "local-model"
 
 [decision]
 backend = "local"
-run = "jaredpalmer/kev-0.8b"
+run = "TigreGotico/jevasio-0.8b-v2"
 device = "cpu"
