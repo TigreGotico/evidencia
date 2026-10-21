@@ -49,6 +49,9 @@ An unknown key stops the service when it starts, with an error that names the ke
 | `sources` | `[]` | Public sources that a request can name. Refer to [Public sources](sources.md) |
 | `user_agent` | `evidencia/<version> (https://github.com/TigreGotico/evidencia)` | User-Agent sent to the public sources. Add your contact information |
 | `source_timeout` | `10` | Seconds to wait for each request to a public source |
+| `transport` | none | How requests to the public sources are sent: `curl_cffi`, `requests`, `flaresolverr` or `browserless`. Without it, curl_cffi. Refer to [Public sources](sources.md#sites-that-refuse-a-client) |
+| `flaresolverr_url` | none | A FlareSolverr server. A GET that a site refuses is sent again through it |
+| `browserless_url` | none | A browserless server, for `transport = "browserless"` |
 | `ui` | `true` | Serves the [demo page](demo.md) at `/` |
 
 ## Decision settings
@@ -81,6 +84,9 @@ A variable that is set and not empty replaces the value from the file. `EVIDENCI
 | `EVIDENCIA_GENERATOR_MODEL` | `generator_config.model` |
 | `EVIDENCIA_GENERATOR_URL` | `generator_config.api_url` |
 | `EVIDENCIA_DATA_DIR` | `data_dir` |
+| `EVIDENCIA_TRANSPORT` | `transport` |
+| `EVIDENCIA_FLARESOLVERR_URL` | `flaresolverr_url` |
+| `EVIDENCIA_BROWSERLESS_URL` | `browserless_url` |
 | `EVIDENCIA_SOURCES` | `sources`, as a comma-separated list: `pt.wikipedia,wikidata` |
 | `EVIDENCIA_DECISION_BACKEND` | `decision.backend` |
 | `EVIDENCIA_DECISION_URL` | `decision.url` |

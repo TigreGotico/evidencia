@@ -24,6 +24,7 @@ dependencies = [
     "ovos-solver-bm25-plugin>=0.1.3a1",
     "ovos-document-chunkers>=0.1.3a1",
     "requests>=2.31",
+    "unblock_requests[stealth]>=0.3.1a1",
     "pydantic>=2.9",
     "fastapi>=0.115",
     "uvicorn>=0.30",

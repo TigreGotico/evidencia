@@ -8,6 +8,8 @@ from typing import Any
 
 from evidencia.version import __version__
 
+TRANSPORTS = {"requests", "curl_cffi", "flaresolverr", "browserless"}
+
 
 @dataclass
 class DecisionConfig:
@@ -48,6 +50,9 @@ class Config:
     sources: list[str] = field(default_factory=list)   # remote sources a request may name, e.g. "pt.wikipedia"
     user_agent: str = f"evidencia/{__version__} (https://github.com/TigreGotico/evidencia)"
     source_timeout: float = 10.0                       # seconds for each request to a remote source
+    transport: str | None = None                       # requests, curl_cffi, flaresolverr or browserless; curl_cffi when unset
+    flaresolverr_url: str | None = None                # a FlareSolverr that solves a request a source refuses
+    browserless_url: str | None = None                 # a browserless that the browserless transport loads pages with
     data_dir: str | None = None                        # keep collections on disk here; in memory when unset
     embedding_model: str | None = None                 # model2vec model for hybrid retrieval; BM25 only when unset
     dedupe_threshold: float | None = None              # drop a candidate this similar to one already seen
@@ -78,6 +83,8 @@ class Config:
                 raise ValueError(f"dedupe_threshold must be a number in (0, 1], got {self.dedupe_threshold!r}")
             if not self.embedding_model:
                 raise ValueError("dedupe_threshold needs embedding_model")
+        if self.transport is not None and self.transport not in TRANSPORTS:
+            raise ValueError(f"transport must be one of {sorted(TRANSPORTS)}, got {self.transport!r}")
         if isinstance(self.source_timeout, bool) or not isinstance(self.source_timeout, (int, float)) \
                 or self.source_timeout <= 0:
             raise ValueError(f"source_timeout must be a number of seconds above 0, got {self.source_timeout!r}")
@@ -107,6 +114,10 @@ class Config:
             data["generator"] = env["EVIDENCIA_GENERATOR"]
         if env.get("EVIDENCIA_DATA_DIR"):
             data["data_dir"] = env["EVIDENCIA_DATA_DIR"]
+        for var, key in (("EVIDENCIA_TRANSPORT", "transport"), ("EVIDENCIA_FLARESOLVERR_URL", "flaresolverr_url"),
+                         ("EVIDENCIA_BROWSERLESS_URL", "browserless_url")):
+            if env.get(var):
+                data[key] = env[var]
         if env.get("EVIDENCIA_SOURCES"):
             data["sources"] = [n.strip() for n in env["EVIDENCIA_SOURCES"].split(",") if n.strip()]
         return cls(decision=_decision_config(decision), **data)

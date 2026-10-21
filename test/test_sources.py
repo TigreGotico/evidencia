@@ -12,7 +12,7 @@ STOPWORDS = frozenset(load_locale("pt-PT")["stopwords"])
 
 class FakeResponse:
     def __init__(self, body: bytes, status: int = 200):
-        self.body, self.status = body, status
+        self.body, self.status_code = body, status
 
     def __enter__(self):
         return self
@@ -21,8 +21,8 @@ class FakeResponse:
         return False
 
     def raise_for_status(self):
-        if self.status >= 400:
-            raise requests.HTTPError(f"{self.status}")
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code}", response=self)
 
     def iter_content(self, size):
         for start in range(0, len(self.body), size):
@@ -30,15 +30,22 @@ class FakeResponse:
 
 
 class FakeHttp:
-    """Routes a GET to ``route(url, params)``, which returns a JSON-able value, bytes, or an exception."""
+    """Routes a request to ``route(url, params)``, which returns a JSON-able value, bytes, or an exception.
+    For a POST, ``params`` is the JSON body."""
 
     def __init__(self, route):
         self.route = route
         self.calls = []
 
     def get(self, url, params=None, timeout=None, stream=False):
-        self.calls.append((url, dict(params or {})))
-        out = self.route(url, dict(params or {}))
+        return self._send(url, dict(params or {}))
+
+    def post(self, url, json=None, timeout=None, stream=False):
+        return self._send(url, json)
+
+    def _send(self, url, params):
+        self.calls.append((url, params))
+        out = self.route(url, params)
         if isinstance(out, Exception):
             raise out
         if isinstance(out, FakeResponse):
@@ -241,8 +248,9 @@ def test_arquivo_reads_the_extracted_text_and_cites_the_archived_copy():
     assert hits[0].url == "https://arquivo.pt/wayback/20151125022013/x"
 
 
-def test_only_arquivo_forbids_commercial_use():
-    assert {name for name, cls in CATALOG.items() if not cls.commercial} == {"arquivo.pt"}
+def test_commercial_use_is_cleared_only_for_the_openly_licensed_sources():
+    assert {name for name, cls in CATALOG.items() if cls.commercial} == {
+        "pt.wikipedia", "pt.wikisource", "pt.wiktionary", "wikidata", "dicionario-aberto", "gleif"}
 
 
 def test_build_sources_refuses_an_unknown_name_and_sends_the_user_agent():
