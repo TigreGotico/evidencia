@@ -1,8 +1,8 @@
-<!-- agent-hint: Backed by Containerfile, compose.yml and evidencia.example.toml. The commands here were run with rootless podman; keep the --userns=keep-id note, because without it the container user cannot read a mounted host cache. If you change the image's installed extras, update the "What the image holds" list. -->
+<!-- agent-hint: Backed by Containerfile, compose.yml and evidencia.example.toml. The podman commands were run with rootless podman; keep the --userns=keep-id note, because without it the container user cannot read a mounted host cache. The AMALIA memory figures were measured on an RTX 3060 6 GB (knowledge/wiki/audits/kev-rag/evidencia/live-v2/). If you change the image's installed extras, update the "What the image holds" list. -->
 
 # Deployment
 
-evidencia runs as one process. It keeps its collections in memory, so run one instance per set of collections.
+evidencia runs as one process. With `data_dir`, it keeps its collections in files. Run one instance for each `data_dir`, because two instances do not see each other's changes.
 
 ## Container image
 
@@ -20,22 +20,49 @@ podman build -t evidencia -f Containerfile --build-arg TORCH_INDEX=https://downl
 
 What the image holds:
 
-- evidencia with the `local` extra, so the decision model runs inside the container.
-- The OpenAI-compatible chat engine. The GGUF engine is not in the image, because it needs a C compiler to build.
-- A non-root user with uid 1000, and the models directory `/models` (`HF_HOME`).
+- evidencia with the `local` and `hybrid` extras, so the decision model and the embedding model run inside the container.
+- The built-in chat model presets. They call the chat model over HTTP, so the image needs no chat engine package.
+- A non-root user with uid 1000, the models directory `/models` (`HF_HOME`), and the collections directory `/collections`. Both are volumes.
 
 The service in the image listens on port 8080.
 
 ## Run with compose
 
-`compose.yml` builds the image, mounts `evidencia.toml` from the current directory, and keeps the models in a named volume. Run it with `podman-compose`:
+`compose.yml` starts two services:
+
+| Service | Does |
+| --- | --- |
+| `evidencia` | Builds the image, mounts `evidencia.toml` from the current directory, and keeps models and collections in named volumes |
+| `amalia` | llama.cpp with CUDA, serving AMALIA-9B Q4_K_M as the model `amalia` on port 8000 inside the compose network |
 
 ```bash
 cp evidencia.example.toml evidencia.toml
 podman-compose up
 ```
 
-The example file runs the decision model on the CPU, and sends the chat requests to `http://host.containers.internal:8000/v1`, which is port 8000 on the host. `host.containers.internal` is the name that Podman gives the host. Change `generator_config.api_url` to point to your chat model.
+The example file sends the chat requests to `http://amalia:8000/v1`, keeps the collections in `/collections`, and runs the decision model on the CPU. The first start downloads AMALIA (5.2 GB) to the `models` volume. The first question downloads the decision model (about 3 GB) to the same volume.
+
+The `amalia` service needs an NVIDIA GPU and the NVIDIA Container Toolkit. With Docker, replace `devices` with a GPU reservation (`deploy.resources.reservations.devices`).
+
+### GPU memory
+
+AMALIA-9B Q4_K_M with a 4096-token context uses about 4.8 GB on a 6 GB GPU. Do not set `--n-gpu-layers`: without it, llama.cpp puts as many layers on the GPU as the free memory holds. A fixed `--n-gpu-layers 99` with a context of 8192 runs out of memory on 6 GB.
+
+The decision model also needs GPU memory. When AMALIA uses a 6 GB GPU, keep `device = "cpu"` for the decision model. On the CPU, the first question takes about 11 seconds to select, because the model loads. After that, each gate took 0.5 to 3 seconds in the measured runs. Longer evidence from public sources takes longer.
+
+### A hosted chat model instead
+
+To use Claude or another hosted model, remove the `amalia` service and the `depends_on` lines of the `evidencia` service, change `generator` in `evidencia.toml`, and give the key in the environment:
+
+```toml
+generator = "anthropic"
+```
+
+```bash
+EVIDENCIA_GENERATOR_KEY=sk-ant-... podman-compose up evidencia
+```
+
+Refer to [Chat models](generators.md).
 
 ## Run with a host model cache
 
@@ -44,17 +71,19 @@ To use models that the host has already downloaded, mount the host cache read-on
 ```bash
 podman run --rm --userns=keep-id -p 127.0.0.1:8080:8080 \
   -v "$HOME/.cache/huggingface:/models:ro" -e HF_HUB_OFFLINE=1 \
+  -v evidencia-collections:/collections -e EVIDENCIA_DATA_DIR=/collections \
   -e EVIDENCIA_DECISION_BACKEND=local -e EVIDENCIA_DECISION_DEVICE=cpu \
+  -e EVIDENCIA_GENERATOR_URL=http://host.containers.internal:8000/v1 \
   evidencia
 ```
 
 The model must be in the host cache already. Without `--userns=keep-id`, the model cannot load. Then gate questions fail, and after the first one `/health` reports `degraded`.
 
-Without a configuration file, the image uses the defaults. The default decision backend is `http`, so set `EVIDENCIA_DECISION_BACKEND=local` or mount a configuration file.
+Without a configuration file, the image uses the defaults. The default decision backend is `http`, so set `EVIDENCIA_DECISION_BACKEND=local` or mount a configuration file. `host.containers.internal` is the name that Podman gives the host.
 
 ## Authentication
 
-Set `api_key`, or `EVIDENCIA_API_KEY`, before other hosts can reach the port. Then every `/v1` call must send `Authorization: Bearer <key>`. `GET /health` and the OpenAPI pages (`/docs`, `/redoc`, `/openapi.json`) stay open.
+Set `api_key`, or `EVIDENCIA_API_KEY`, before other hosts can reach the port. Then every `/v1` call must send `Authorization: Bearer <key>`. `GET /`, `GET /health` and the OpenAPI pages (`/docs`, `/redoc`, `/openapi.json`) stay open. When a call returns 401, the demo page asks for the key.
 
 ```bash
 EVIDENCIA_API_KEY=change-me podman-compose up
@@ -68,7 +97,7 @@ The service has no TLS. Put it behind a reverse proxy that terminates TLS when t
 
 ## Logs
 
-The service writes its log to standard error and the HTTP access log to standard output. When the decision backend or the chat model fails, the log line holds the cause, and the client gets a fixed message.
+The service writes its log to standard error and the HTTP access log to standard output. When the decision backend, the chat model or a public source fails, the log line holds the cause, and the client gets a fixed message.
 
 ---
 [← Configuration](configuration.md) · [Home](index.md) · [Python →](python.md)

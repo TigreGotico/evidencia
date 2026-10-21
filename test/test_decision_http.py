@@ -1,4 +1,5 @@
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -119,4 +120,15 @@ def test_local_backend_that_cannot_load_is_unavailable():
     q = {"select": load_locale("pt-PT")["select"]}
     with pytest.raises(DecisionUnavailable, match="no such checkpoint"):
         backend.ask({"question": "q", "passage": "p"}, q)
+    assert backend.describe()["reachable"] is False
+
+
+def test_local_backend_without_torch_is_unavailable(monkeypatch):
+    from evidencia import LocalDecision
+
+    monkeypatch.setitem(sys.modules, "torch", None)     # as when the local extra is not installed
+    monkeypatch.delitem(sys.modules, "evidencia._vendor.kev.model", raising=False)
+    backend = LocalDecision("nobody/nothing")
+    with pytest.raises(DecisionUnavailable, match="torch"):
+        backend.ask({"question": "q", "passage": "p"}, {"select": load_locale("pt-PT")["select"]})
     assert backend.describe()["reachable"] is False

@@ -64,7 +64,7 @@ def test_grounded_answer_is_returned(make_engine):
     assert result["answer"] == "Lisboa."
     assert result["abstained_at"] is None
     assert result["grounded"] == {"p": 0.9, "threshold": 0.5, "passed": True}
-    assert chat.prompts == [f"Evidência:\n- {CAPITAL}\n\nPergunta: {Q}"]
+    assert chat.prompts == [f"Evidência:\n[1] {CAPITAL}\n\nPergunta: {Q}"]
 
 
 def test_ungrounded_answer_is_suppressed(make_engine):
@@ -166,18 +166,22 @@ def test_probability_outside_unit_interval_is_unavailable(value):
 def test_collections_survive_concurrent_creation(make_engine):
     import sys
     import threading
+    from concurrent.futures import ThreadPoolExecutor
     engine = make_engine()
     old = sys.getswitchinterval()
     sys.setswitchinterval(1e-6)
-    try:
-        for trial in range(50):
-            name = f"c{trial}"
-            threads = [threading.Thread(target=lambda i=i: engine.collection(name, create=True).add(f"texto {i}", f"{i}.txt"))
-                       for i in range(4)]
-            for th in threads:
-                th.start()
-            for th in threads:
-                th.join()
-            assert len(engine.collection(name).passages) == 4, trial
-    finally:
-        sys.setswitchinterval(old)
+    # the threads start once: a thread started under a coverage tracer can die before it runs its target
+    with ThreadPoolExecutor(4) as pool:
+        try:
+            for trial in range(50):
+                name = f"c{trial}"
+                start = threading.Barrier(4)
+
+                def add(i, name=name, start=start):
+                    start.wait()
+                    engine.collection(name, create=True).add(f"texto {i}", f"{i}.txt")
+
+                list(pool.map(add, range(4)))
+                assert len(engine.collection(name).passages) == 4, trial
+        finally:
+            sys.setswitchinterval(old)

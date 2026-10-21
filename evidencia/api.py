@@ -1,16 +1,20 @@
 """HTTP API."""
 from __future__ import annotations
 
+import asyncio
 import hmac
+import json
 import logging
+import queue
 import threading
 import time
+from importlib import resources
 from pathlib import PurePath
 from typing import Literal
 
 import requests
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from evidencia import __version__
@@ -18,6 +22,7 @@ from evidencia.config import Config
 from evidencia.decision import DecisionRejected, DecisionUnavailable
 from evidencia.index import FORMATS
 from evidencia.pipeline import Evidencia, GeneratorUnavailable
+from evidencia.sources import CATALOG
 
 LOG = logging.getLogger("evidencia")
 Format = Literal["text", "markdown", "html", "pdf"]
@@ -41,8 +46,19 @@ class DocumentIn(BaseModel):
 
 
 class QuestionIn(BaseModel):
-    collection: str
     question: str = Field(min_length=1)
+    collection: str | None = Field(default=None, description="A local collection to search")
+    sources: list[str] = Field(default=[], description="Remote sources to search, from GET /v1/sources")
+
+    @model_validator(mode="after")
+    def somewhere(self):
+        if self.collection is None and not self.sources:
+            raise ValueError("name a collection, at least one source, or both")
+        return self
+
+
+class StreamIn(QuestionIn):
+    generate: bool = Field(default=True, description="False stops after the context gates, as /v1/context does")
 
 
 class RetrieveIn(QuestionIn):
@@ -53,6 +69,10 @@ class GroundingIn(BaseModel):
     question: str = Field(min_length=1)
     evidence: list[str] = Field(min_length=1)
     answer: str = Field(min_length=1)
+
+
+class StreamClosed(Exception):
+    """Raised inside a streamed request after its client has gone, to stop the work."""
 
 
 def create_app(config: Config | None = None, engine: Evidencia | None = None) -> FastAPI:
@@ -83,13 +103,21 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
     @app.exception_handler(GeneratorUnavailable)
     def generator_down(_, e: GeneratorUnavailable):
         LOG.error("generator unavailable: %s", e)
-        return JSONResponse({"detail": "generator unavailable"}, status_code=502)
+        return JSONResponse({"detail": e.reason}, status_code=502)
 
     def collection_or_404(name: str):
         try:
             return engine.collection(name)
         except KeyError:
             raise HTTPException(404, f"no collection {name!r}") from None
+
+    def check_targets(body: QuestionIn):
+        try:
+            engine.targets(body.collection, body.sources)
+        except KeyError:
+            raise HTTPException(404, f"no collection {body.collection!r}") from None
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
 
     def too_large(size: int):
         if size > config.max_document_bytes:
@@ -124,9 +152,14 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
     @app.get("/v1/status", dependencies=[Depends(auth)])
     def status():
         return {"version": __version__, "lang": config.lang, "decision": engine.decision.describe(),
-                "generator": config.generator, "fail_open": config.fail_open,
+                "generator": config.generator, "generator_configured": engine.has_generator,
+                "fail_open": config.fail_open,
                 "thresholds": {"select": config.select_threshold, "sufficient": config.sufficient_threshold,
                                "grounded": config.grounded_threshold},
+                "retrieval": {"n_candidates": config.n_candidates, "top_k": config.top_k,
+                              "max_rounds": config.max_rounds, "hybrid": bool(config.embedding_model),
+                              "dedupe_threshold": config.dedupe_threshold},
+                "sources": sorted(engine.sources),
                 "collections": len(engine.collections_snapshot())}
 
     @app.get("/v1/models", dependencies=[Depends(auth)])
@@ -134,6 +167,12 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
         """The model this instance serves on /v1/systemone, in the shape HttpDecision.describe reads."""
         name = config.decision.run if config.decision.backend == "local" else config.decision.model
         return {"models": [{"name": name}]}
+
+    @app.get("/v1/sources", dependencies=[Depends(auth)])
+    def sources():
+        """Every remote source evidencia knows, with its licence and whether this service queries it."""
+        return {"sources": [{**cls.describe(), "enabled": name in engine.sources}
+                            for name, cls in CATALOG.items()]}
 
     @app.get("/v1/collections", dependencies=[Depends(auth)])
     def collections():
@@ -194,33 +233,82 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
 
     @app.delete("/v1/collections/{name}/documents/{source:path}", dependencies=[Depends(auth)])
     def delete_document(name: str, source: str):
-        removed = collection_or_404(name).remove(source)
+        collection_or_404(name)
+        removed = engine.remove_document(name, source)
         if not removed:
             raise HTTPException(404, f"no document {source!r} in {name!r}")
         return {"collection": name, "source": source, "removed": removed}
 
     @app.post("/v1/retrieve", dependencies=[Depends(auth)])
     def retrieve(body: RetrieveIn):
-        hits = collection_or_404(body.collection).search(body.question, body.k)
-        try:
-            scored = [{**p.__dict__, "p_select": engine.select(body.question, p)} for p in hits]
-            gates = "applied"
-        except DecisionUnavailable:
-            if not config.fail_open:
-                raise
-            scored, gates = [{**p.__dict__, "p_select": None} for p in hits], "unavailable"
-        return {"question": body.question, "passages": scored, "gates": gates,
-                "select_threshold": config.select_threshold}
+        check_targets(body)
+        return engine.retrieve(body.question, body.collection, body.sources, body.k)
 
     @app.post("/v1/context", dependencies=[Depends(auth)])
     def context(body: QuestionIn):
-        collection_or_404(body.collection)
-        return engine.context(body.question, body.collection).as_dict()
+        check_targets(body)
+        return engine.context(body.question, body.collection, body.sources).as_dict()
 
     @app.post("/v1/answer", dependencies=[Depends(auth)])
     def answer(body: QuestionIn):
-        collection_or_404(body.collection)
-        return engine.answer(body.question, body.collection)
+        check_targets(body)
+        return engine.answer(body.question, body.collection, body.sources)
+
+    @app.post("/v1/answer/stream", dependencies=[Depends(auth)])
+    def answer_stream(body: StreamIn, request: Request):
+        """Server-sent events: one event per pipeline step, then ``result`` with the body of /v1/answer or /v1/context."""
+        check_targets(body)
+        events: queue.Queue = queue.Queue()
+        left = threading.Event()    # the client closed the stream
+
+        def emit(name: str, data: dict):
+            if left.is_set():
+                raise StreamClosed
+            events.put((name, data))
+
+        def run():
+            try:
+                if body.generate:
+                    result = engine.answer(body.question, body.collection, body.sources, on_event=emit)
+                else:
+                    result = engine.context(body.question, body.collection, body.sources, on_event=emit).as_dict()
+                events.put(("result", result))
+            except StreamClosed:
+                LOG.info("answer stream closed by the client; stopped")
+            except DecisionUnavailable as e:
+                LOG.error("decision backend unavailable: %s", e)
+                events.put(("error", {"status": 503, "detail": "decision backend unavailable"}))
+            except DecisionRejected as e:
+                LOG.warning("decision model rejected a request: %s", e)
+                events.put(("error", {"status": 422, "detail": "decision model rejected the request"}))
+            except GeneratorUnavailable as e:
+                LOG.error("generator unavailable: %s", e)
+                events.put(("error", {"status": 502, "detail": e.reason}))
+            except Exception:
+                LOG.exception("answer stream failed")
+                events.put(("error", {"status": 500, "detail": "internal error"}))
+            events.put(None)
+
+        threading.Thread(target=run, daemon=True).start()
+
+        async def stream():
+            try:
+                while True:
+                    try:
+                        item = events.get_nowait()
+                    except queue.Empty:
+                        if await request.is_disconnected():
+                            return
+                        await asyncio.sleep(0.05)
+                        continue
+                    if item is None:
+                        return
+                    name, data = item
+                    yield f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+            finally:
+                left.set()
+
+        return StreamingResponse(stream(), media_type="text/event-stream", headers={"cache-control": "no-cache"})
 
     @app.post("/v1/systemone", dependencies=[Depends(auth)])
     def systemone(body: dict):
@@ -233,5 +321,12 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
     @app.post("/v1/check/grounding", dependencies=[Depends(auth)])
     def check_grounding(body: GroundingIn):
         return engine.check_grounding(body.question, body.evidence, body.answer).as_dict()
+
+    if config.ui:
+        page = (resources.files("evidencia") / "web" / "index.html").read_text(encoding="utf-8")
+
+        @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+        def ui():
+            return page
 
     return app

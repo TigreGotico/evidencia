@@ -104,4 +104,4 @@ key = "the first instance's api_key"
 The first instance needs `decision.backend = "local"`. This puts the model on one machine with a GPU and lets other instances share it.
 
 ---
-[← Gates](gates.md) · [Home](index.md) · [Documents →](documents.md)
+[← Gates](gates.md) · [Home](index.md) · [Chat models →](generators.md)
