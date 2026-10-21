@@ -28,12 +28,13 @@ The service in the image listens on port 8080.
 
 ## Run with compose
 
-`compose.yml` starts two services:
+`compose.yml` starts three services:
 
 | Service | Does |
 | --- | --- |
 | `evidencia` | Builds the image, mounts `evidencia.toml` from the current directory, and keeps models and collections in named volumes |
 | `amalia` | llama.cpp with CUDA, serving AMALIA-9B Q4_K_M as the model `amalia` on port 8000 inside the compose network |
+| `flaresolverr` | FlareSolverr on port 8191 inside the compose network. evidencia sends to it a request that a public source refuses. Refer to [Public sources](sources.md#sites-that-refuse-a-client) |
 
 ```bash
 cp evidencia.example.toml evidencia.toml

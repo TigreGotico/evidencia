@@ -145,7 +145,8 @@ def test_sources_endpoint_lists_the_catalogue_with_licences():
     body = client().get("/v1/sources").json()["sources"]
     by_name = {s["name"]: s for s in body}
     assert set(by_name) == {"pt.wikipedia", "pt.wikisource", "pt.wiktionary", "wikidata", "dicionario-aberto",
-                            "arquivo.pt"}
+                            "arquivo.pt", "gov.pt", "geoapi.pt", "ipma", "dados.gov.pt", "vies", "gleif",
+                            "dns.pt", "dgeg"}
     assert by_name["pt.wikipedia"]["enabled"] and not by_name["wikidata"]["enabled"]
     assert by_name["arquivo.pt"]["commercial"] is False
     assert by_name["wikidata"]["licence"] == "CC0 1.0"

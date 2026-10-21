@@ -126,7 +126,9 @@ class Evidencia:
         if sources is None:
             sources = build_sources(self.config.sources, self.config.user_agent,
                                     frozenset(self.gates.locale.get("stopwords", ())), self.config.lang,
-                                    self.config.source_timeout, self.embed)
+                                    self.config.source_timeout, self.embed, transport=self.config.transport,
+                                    flaresolverr_url=self.config.flaresolverr_url,
+                                    browserless_url=self.config.browserless_url)
         self.sources: dict[str, Source] = sources
 
     def collection(self, name: str, create: bool = False) -> Collection:

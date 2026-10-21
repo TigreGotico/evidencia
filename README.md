@@ -17,6 +17,10 @@ Pergunta:  Quando foi construída a Torre de Belém?        (pt.wikipedia + arqu
 Resposta:  A Torre de Belém foi construída no século XVI [4]. A construção começou em 1514 [1].
            sufficient 0.934 · grounded 0.966 · 4 of 16 passages kept
 
+Pergunta:  Qual é o telefone da Câmara Municipal de Vila Nova de Gaia?    (geoapi.pt)
+Resposta:  O telefone da Câmara Municipal de Vila Nova de Gaia é 223742400 [1].
+           sufficient 0.995 · grounded 0.995
+
 Pergunta:  Quantos habitantes tem Lisboa?                  (a document that does not say)
 Resposta:  Não tenho informação suficiente para responder a essa pergunta.
            abstained at sufficient, p 0.128
@@ -25,7 +29,7 @@ Resposta:  Não tenho informação suficiente para responder a essa pergunta.
 ## What it has
 
 - **Your documents.** Text, Markdown, HTML and PDF, in named collections that persist on disk. Retrieval is BM25, or BM25 and embeddings together.
-- **Public sources.** Wikipédia, Wikisource, Wikcionário, Wikidata, Dicionário Aberto and Arquivo.pt, searched at question time with no API key.
+- **Public sources.** Wikipédia, Wikisource, Wikcionário, Wikidata, Dicionário Aberto and Arquivo.pt. Public services and service desks such as employment centres on gov.pt, municipality and parish facts and postal codes from geoapi.pt, IPMA weather forecasts and warnings, the open datasets on dados.gov.pt, companies by NIF or name from VIES and GLEIF, .pt domains from DNS.pt, and fuel prices from DGEG. All are searched at question time with no API key.
 - **A chat model of your choice.** [AMALIA](https://huggingface.co/duarteocarmo/AMALIA-9B-0626-DPO-GGUF), a European Portuguese model, on your own GPU. Or Claude, OpenAI, OpenRouter, OpenCode, Ollama, or any OpenAI-compatible server.
 - **A demo page** that shows each gate decide, live.
 - **An MCP server**, so that Claude Desktop, Claude Code or OpenCode can use evidencia as a tool.
@@ -94,7 +98,7 @@ No GPU? Use Claude or another hosted model instead of AMALIA: refer to [Chat mod
 | [Decision models](docs/decision-models.md) | The models, their licences, and the HTTP and in-process backends |
 | [Chat models](docs/generators.md) | AMALIA, Claude, OpenAI, OpenRouter, OpenCode, Ollama and API keys |
 | [Documents](docs/documents.md) | Formats, passages, persistence, hybrid retrieval and near-duplicates |
-| [Public sources](docs/sources.md) | The six public sources, their licences, and how they are searched |
+| [Public sources](docs/sources.md) | The fourteen public sources, their licences, and how they are searched |
 | [Agents](docs/agents.md) | Connect Claude Desktop, Claude Code or OpenCode through MCP |
 | [Demo page](docs/demo.md) | The web page that shows each gate decide |
 | [HTTP API](docs/api.md) | Every endpoint, with request and response examples |
@@ -106,6 +110,6 @@ No GPU? Use Claude or another hosted model instead of AMALIA: refer to [Chat mod
 
 ## Licence
 
-evidencia is licensed under the Apache License 2.0. The decision model, the chat model and each public source have their own licence, and that licence applies to their use. Arquivo.pt forbids commercial use.
+evidencia is licensed under the Apache License 2.0. The decision model, the chat model and each public source have their own licence, and that licence applies to their use. Arquivo.pt forbids commercial use. evidencia does not clear gov.pt, geoapi.pt, IPMA, dados.gov.pt, VIES, DNS.pt or DGEG for commercial use.
 
 `evidencia/_vendor/kev/` holds four inference modules of [Kev](https://github.com/jaredpalmer/kev) (commit `1f04cfa`), unchanged, under the Apache License 2.0 in that directory.

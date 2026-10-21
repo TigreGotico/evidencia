@@ -160,3 +160,38 @@ def test_a_stream_that_the_client_leaves_stops_asking_the_decision_model():
         assert asked < 30
     finally:
         server.should_exit = True
+
+
+def test_one_arquivo_page_that_fails_to_load_leaves_the_others():
+    def route(url, params):
+        if url == ArquivoPt.api:
+            return {"response_items": [{"title": t, "linkToArchive": f"https://arquivo.pt/wayback/1/{t}",
+                                        "linkToExtractedText": f"https://arquivo.pt/textextracted?{t}"} for t in "ab"]}
+        if url.endswith("?a"):
+            return OSError("curl: (63) Exceeded the maximum allowed file size")
+        return "A Torre de Belém foi construída em 1514.".encode()
+    hits = ArquivoPt(FakeHttp(route), STOPWORDS).search("Torre de Belém", 2)
+    assert [h.source for h in hits] == ["b"]
+
+
+class BrokenSource(Wikipedia):
+    def fetch(self, question):
+        raise NotImplementedError("a bug, not an outage")
+
+
+def test_a_programming_error_in_a_source_is_raised_not_reported_as_an_outage():
+    with pytest.raises(NotImplementedError):
+        BrokenSource(FakeHttp(lambda url, params: {}), STOPWORDS).search(Q, 1)
+
+
+class SlowSend(FakeHttp):
+    """A transport that holds the whole reply before it returns, as curl_cffi and FlareSolverr do."""
+
+    def _send(self, url, params):
+        time.sleep(0.5)
+        return super()._send(url, params)
+
+
+def test_a_reply_that_arrives_whole_after_the_timeout_window_of_the_stream_is_kept():
+    http = SlowSend(lambda url, params: {"query": {"search": []}})
+    assert Wikipedia(http, STOPWORDS, timeout=0.3).get_json("https://pt.wikipedia.org/w/api.php") == {"query": {"search": []}}
