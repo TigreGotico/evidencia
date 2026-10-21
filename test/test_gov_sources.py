@@ -491,3 +491,43 @@ def test_ipma_says_hoje_for_the_day_in_lisbon_not_on_the_server_clock(monkeypatc
             return datetime(2026, 10, 21, 23, 30, tzinfo=timezone.utc).astimezone(tz)
     monkeypatch.setattr(evidencia.sources, "datetime", LateUtc, raising=False)
     assert Ipma.today() == date(2026, 10, 22)
+
+
+def test_a_place_in_a_lowercase_question_without_accents_is_found_by_its_proper_name():
+    source = GeoApiPt(FakeHttp(geo_route), STOPWORDS)
+    assert source.names("quantos habitantes tem evora") == ["Évora"]
+    assert source.names("Quantos habitantes tem Evora?") == ["Évora"]
+    assert "o município de Évora tinha 53 577 habitantes" in source.fetch("quantos habitantes tem evora")[0].text
+
+
+def test_a_place_name_that_is_also_a_common_word_needs_a_capital():
+    source = GeoApiPt(FakeHttp(geo_route), STOPWORDS)
+    assert source.names("onde mora o presidente") == []
+    assert source.names("Quantos habitantes tem Mora?") == ["Mora"]
+
+
+def test_ipma_and_dgeg_read_a_place_and_a_fuel_without_accents():
+    source = Ipma(FakeHttp(ipma_route), STOPWORDS)
+    source.today = lambda: date(2026, 10, 21)
+    assert source.fetch("vai chover amanha em viana do castelo")[0].title == "Previsão do IPMA para Viana do Castelo"
+    http = FakeHttp(dgeg_route)
+    Dgeg(http, STOPWORDS).fetch("onde esta o gasoleo mais barato em evora")
+    assert (http.calls[-1][1]["idsTiposComb"], http.calls[-1][1]["idsMunicipios"]) == (2101, "92")
+
+
+def test_a_question_written_with_capitals_names_places_only_by_its_capitals():
+    source = GeoApiPt(FakeHttp(geo_route), STOPWORDS)
+    assert source.names("Qual é o maior porto de Portugal?") == ["Portugal"]
+    assert source.names("Quem fundou a Porto Editora?") == ["Porto Editora"]
+    assert source.names("o bebé já caminha sozinho?") == []
+
+
+def test_an_acronym_does_not_turn_the_gazetteer_off():
+    source = GeoApiPt(FakeHttp(geo_route), STOPWORDS)
+    assert source.names("quantos habitantes tem evora segundo o INE") == ["INE", "Évora"]
+
+
+def test_a_capitalised_place_keeps_its_lowercase_joining_words():
+    source = GeoApiPt(FakeHttp(geo_route), STOPWORDS)
+    assert source.names("Quantos habitantes tem Arruda dos Vinhos?") == ["Arruda dos Vinhos"]
+    assert source.names("quantos habitantes tem arruda dos vinhos") == ["Arruda dos Vinhos"]

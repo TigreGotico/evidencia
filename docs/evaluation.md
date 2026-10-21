@@ -51,6 +51,21 @@ These counts come from the same cases that they describe, so they overstate how 
 
 Both models can call partial evidence sufficient for a question that needs two facts. More retrieval rounds do not help when the first round already passes.
 
+## Regression rows
+
+`eval/regressions_pt.json` holds answers from live runs that the gates passed and should have stopped, with the evidence and the draft as the run returned them. Claude Opus 5.5 set the labels from the evidence text. No person reviewed them. The rows are not part of the case file and do not change the tables above.
+
+```bash
+.venv/bin/python scripts/regressions.py TigreGotico/jevasio-0.8b-v2
+```
+
+The script prints each row with the probability of its gate, and `right` when the gate decides as the label says at the default threshold:
+
+| Row | Gate | Jevásio-0.8B-v2 | Result at the default threshold |
+| --- | --- | --- | --- |
+| "Como peço o subsídio de desemprego?" with evidence about the subsequent benefit | sufficient | 0.973 | Passes at 0.5. The model calls the evidence sufficient |
+| "Quantos habitantes tem Ponta Delgada?" with an answer that calls 2011 the latest count | grounded | 0.753 | Stopped at 0.8 |
+
 ## Backend parity
 
 ```bash

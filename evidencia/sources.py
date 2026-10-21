@@ -8,13 +8,15 @@ import re
 import socket
 import threading
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import date, datetime
-from functools import cached_property
+from datetime import date, datetime, timezone
+from functools import cache, cached_property
 from html import unescape
+from importlib import resources
 from typing import Protocol
 from urllib.parse import quote, urljoin
 from zoneinfo import ZoneInfo
@@ -29,6 +31,9 @@ MAX_REMOTE_BYTES = 2_000_000    # the most text read from one remote document
 CACHE_SIZE = 128                # questions whose fetched documents are kept
 NAME = re.compile(r"[A-ZÀ-Ý][\w-]*(?:\s+(?:(?:d[aeo]s?)\s+)?[A-ZÀ-Ý][\w-]*)*")  # a run of capitalised words, joined by de, da, do and their plurals
 CACHE_TTL = 600.0               # seconds a fetched document set is reused
+BREAKER_FAILURES = 3            # failed fetches in a row that pause a source
+BREAKER_PAUSE = 60.0            # seconds a paused source answers SourceUnavailable without a request
+MAX_QUERY = 300                 # the longest keyword search: CirrusSearch refuses a longer one
 POSTAL_CODE = re.compile(r"\b\d{4}-\d{3}\b")
 NIF = re.compile(r"(?<![\d-])[1-9]\d{8}(?![\d-])")
 # a phone number also has 9 digits, so a number is a NIF only in a question about a tax number
@@ -36,6 +41,23 @@ NIF_CONTEXT = re.compile(r"\b(?:nifs?|nipcs?|contribuintes?|iva|vat|fiscal|colec
 LISBON = ZoneInfo("Europe/Lisbon")
 PAGE_PRE = re.compile(rb"\A\s*<html.*?<pre[^>]*>(.*?)</pre>", re.S | re.I)   # a JSON reply as a browser shows it
 DOMAIN = re.compile(r"(?<![\w.-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+pt\b", re.I)
+
+
+def fold(text: str) -> str:
+    """The text in lower case and without accents: "Évora", "evora" and "ÉVORA" fold the same."""
+    return "".join(c for c in unicodedata.normalize("NFD", text.casefold()) if not unicodedata.combining(c))
+
+
+@cache
+def gazetteer() -> tuple[dict[str, str], re.Pattern]:
+    """The places a question can name in lower case and without accents: each folded name with its spelling, and
+    a pattern that finds them in a folded question, longest name first. A place that is also a common word, such
+    as Tomar, is left out of the pattern: a question names it with a capital letter."""
+    data = json.loads((resources.files("evidencia") / "locale" / "pt-places.json").read_text(encoding="utf-8"))
+    spelling = {fold(name): name for name in data["names"]}
+    common = {fold(word) for word in data["capitalised_only"]}
+    keys = sorted((key for key in spelling if key not in common), key=len, reverse=True)
+    return spelling, re.compile(rf"\b(?:{'|'.join(map(re.escape, keys))})\b")
 
 
 class Source(Protocol):
@@ -82,12 +104,35 @@ class RemoteSource:
         self.timeout = timeout
         self.embed = embed
         self._cache: OrderedDict[str, tuple[float, Collection]] = OrderedDict()
+        self._fetching: dict[str, Future] = {}
         self._lock = threading.Lock()
+        self._fetches = self._failures = self._in_a_row = 0
+        self._paused_until = 0.0
+        self._trying = False
+        self._last_error: str | None = None
+        self._last_error_at: str | None = None
+        self._last_latency_ms: int | None = None
 
     @classmethod
     def describe(cls) -> dict:
         return {"name": cls.name, "title": cls.title, "homepage": cls.homepage, "licence": cls.licence,
                 "commercial": cls.commercial, "description": cls.description}
+
+    def health(self) -> dict:
+        """The fetches since start, the failures, the last error and how long the source stays paused."""
+        with self._lock:
+            return {"fetches": self._fetches, "failures": self._failures, "consecutive_failures": self._in_a_row,
+                    "last_error": self._last_error, "last_error_at": self._last_error_at,
+                    "last_latency_ms": self._last_latency_ms,
+                    "paused_for_s": max(0, round(self._paused_until - time.monotonic()))}
+
+    def query(self, question: str) -> str:
+        """The content words of the question as one keyword search, cut at a word to MAX_QUERY characters."""
+        query = " ".join(self.terms(question))
+        if len(query) <= MAX_QUERY:
+            return query
+        cut = query[:MAX_QUERY + 1]
+        return cut.rsplit(" ", 1)[0] if " " in cut else cut[:MAX_QUERY]
 
     def terms(self, question: str) -> list[str]:
         """The content words of the question, in order, for a keyword search API."""
@@ -95,7 +140,10 @@ class RemoteSource:
         return list(words) or re.findall(r"\w+", question.lower())
 
     def names(self, question: str) -> list[str]:
-        """The names in the question, such as "Torre de Belém": runs of capitalised words, joined by de, da or do."""
+        """The names in the question, such as "Torre de Belém": runs of capitalised words, joined by de, da or do,
+        then the places in the gazetteer that the question names without capitals or accents. A name that folds to
+        a place takes the spelling of the place, so "Evora" is Évora."""
+        spelling, places = gazetteer()
         found = []
         for match in NAME.finditer(question):
             words = match[0].split()
@@ -103,6 +151,11 @@ class RemoteSource:
                 words.pop(0)    # the capitalised first word of a question, such as "Quando"
             if words:
                 found.append(" ".join(words))
+        found = [spelling.get(fold(name), name) for name in found]
+        # a question with a capitalised word after its first word is written with capitals, so its places have
+        # them too; an acronym such as INE does not count
+        if not re.search(r"(?<=\s)[A-ZÀ-Ý][a-zà-ÿ]", question.strip()):
+            found += [spelling[match[0]] for match in places.finditer(fold(question))]
         return list(dict.fromkeys(found))
 
     def fetch(self, question: str) -> list[Document]:
@@ -119,18 +172,71 @@ class RemoteSource:
         return unique[:k]
 
     def _documents(self, question: str) -> Collection:
+        """The documents for the question, from the cache when they are fresh. Requests for one question at the
+        same time share one fetch. After BREAKER_FAILURES failures of the service in a row the source is paused.
+        After the pause one request tries the service, and a failure pauses it again."""
+        key = " ".join(question.split())
         with self._lock:
-            hit = self._cache.get(question)
+            hit = self._cache.get(key)
             if hit and time.monotonic() - hit[0] < CACHE_TTL:
-                self._cache.move_to_end(question)
+                self._cache.move_to_end(key)
                 return hit[1]
+            if pending := self._fetching.get(key):
+                leader = False
+            else:
+                if self._in_a_row >= BREAKER_FAILURES:
+                    wait = self._paused_until - time.monotonic()
+                    if wait > 0 or self._trying:
+                        raise SourceUnavailable(f"{self.name}: failed {self._in_a_row} times in a row; "
+                                                f"paused for {max(0, round(wait))} s")
+                    self._trying = trial = True
+                else:
+                    trial = False
+                pending = self._fetching[key] = Future()
+                leader = True
+        if not leader:
+            return pending.result()
+        try:
+            col = self._fetch(question)
+        except Exception as e:
+            with self._lock:
+                del self._fetching[key]
+            pending.set_exception(e)
+            raise
+        except BaseException:
+            with self._lock:
+                del self._fetching[key]
+            pending.set_exception(SourceUnavailable(f"{self.name}: the fetch was interrupted"))
+            raise
+        finally:
+            if trial:
+                with self._lock:
+                    self._trying = False
+        with self._lock:
+            self._cache[key] = (time.monotonic(), col)
+            while len(self._cache) > CACHE_SIZE:
+                self._cache.popitem(last=False)
+            del self._fetching[key]
+        pending.set_result(col)
+        return col
+
+    def _fetch(self, question: str) -> Collection:
+        start = time.monotonic()
         try:
             docs = self.fetch(question)
-        except (SourceUnavailable, NotImplementedError, RecursionError):
+        except (NotImplementedError, RecursionError):
             raise
-        except (requests.RequestException, OSError, ValueError, KeyError, TypeError, AttributeError, IndexError,
-                ET.ParseError, RuntimeError) as e:   # RuntimeError: a challenge or a solver that failed
+        except (SourceUnavailable, requests.RequestException, OSError, ValueError, KeyError, TypeError, AttributeError,
+                IndexError, ET.ParseError, RuntimeError) as e:   # RuntimeError: a challenge or a solver that failed
+            self._failed(e, time.monotonic() - start)
+            if isinstance(e, SourceUnavailable):
+                raise
             raise SourceUnavailable(f"{self.name}: {type(e).__name__}: {e}") from e
+        with self._lock:
+            self._fetches += 1
+            self._in_a_row = 0
+            self._paused_until = 0.0
+            self._last_latency_ms = round((time.monotonic() - start) * 1000)
         col = Collection(self.name, lang=self.lang, embed=self.embed)
         titles: set[str] = set()
         for doc in docs:
@@ -141,11 +247,30 @@ class RemoteSource:
                 col.add(doc.text, source, doc.fmt, doc.url)
             except ValueError:
                 continue    # a document with no text adds nothing
-        with self._lock:
-            self._cache[question] = (time.monotonic(), col)
-            while len(self._cache) > CACHE_SIZE:
-                self._cache.popitem(last=False)
         return col
+
+    def _failed(self, error: Exception, seconds: float):
+        """Count a failed fetch. Only a failure of the service counts towards a pause: a reply that evidencia
+        cannot read is the fault of one question, so it does not pause the source for every question."""
+        status = error.response.status_code if isinstance(error, requests.HTTPError) and error.response is not None \
+            else None
+        if isinstance(error, requests.HTTPError):
+            of_service = status is None or status >= 500 or status == 429
+        else:
+            # a requests error is also an OSError, so the requests errors that are not of the service go first
+            of_service = isinstance(error, (SourceUnavailable, requests.ConnectionError, requests.Timeout, RuntimeError)) \
+                or isinstance(error, OSError) and not isinstance(error, requests.RequestException)
+        with self._lock:
+            self._fetches += 1
+            self._failures += 1
+            if of_service:
+                self._in_a_row += 1
+                if self._in_a_row >= BREAKER_FAILURES:
+                    self._paused_until = time.monotonic() + BREAKER_PAUSE
+            # the type and status only: the message of an HTTP error holds the URL, and the URL holds the question
+            self._last_error = f"{self.name}: {type(error).__name__}" + (f" {status}" if status else "")
+            self._last_error_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            self._last_latency_ms = round(seconds * 1000)
 
     def get(self, url: str, **params) -> bytes:
         """The body of a GET, cut at ``max_bytes``. The whole request must end within the source timeout."""
@@ -186,14 +311,18 @@ class MediaWiki(RemoteSource):
     def api(self) -> str:
         return f"https://{self.host}/w/api.php"
 
+    def titles(self, question: str) -> list[str]:
+        """The page titles to look up before the keyword search."""
+        return self.names(question)
+
     def fetch(self, question: str) -> list[Document]:
         # a keyword search needs every word in the page, so the page named in the question comes first
         ids = []
-        if names := self.names(question):
+        if names := self.titles(question):
             titled = self.get_json(self.api, action="query", titles="|".join(names[:self.pool]), redirects=1,
                                    format="json", formatversion=2)
             ids = [page["pageid"] for page in titled["query"]["pages"] if "pageid" in page]
-        found = self.get_json(self.api, action="query", list="search", srsearch=" ".join(self.terms(question)),
+        found = self.get_json(self.api, action="query", list="search", srsearch=self.query(question),
                          srlimit=self.pool, srprop="", format="json", formatversion=2)
         ids = list(dict.fromkeys(ids + [hit["pageid"] for hit in found["query"]["search"]]))[:self.pool]
         if not ids:
@@ -230,12 +359,29 @@ class Wikisource(MediaWiki):
     description = "Public-domain texts: literature, laws and historical documents."
 
 
+# the words a question uses to ask about a word, such as "Como se pronuncia a palavra cônjuge?"
+WORD_TALK = {"palavra", "palavras", "termo", "expressão", "origem", "etimologia", "pronuncia", "pronúncia", "pronunciar",
+             "escreve", "escrever", "plural", "feminino", "masculino", "sinónimo", "sinónimos", "antónimo", "quer", "dizer",
+             "quê"}
+
+
 class Wiktionary(MediaWiki):
     name = "pt.wiktionary"
     title = "Wikcionário"
     host = "pt.wiktionary.org"
     homepage = "https://pt.wiktionary.org"
     description = "Dictionary entries: meanings, grammar and pronunciation."
+
+    def titles(self, question: str) -> list[str]:
+        # an entry title is the word in lower case, as the question asks it; two lookups leave room for the search
+        # the first word of a question has a capital whether or not its entry has one: "Saudade significa o quê?"
+        first = question.split()[0].strip(".,;:!?¿¡«»\"'()") if question.split() else ""
+        names = self.names(question)
+        lead = [first.lower(), first] if first in names else []
+        names = [name for name in names if name != first]
+        in_names = {w for name in names + lead for w in re.findall(r"\w+", name.lower())}
+        words = [w for w in self.terms(question) if w not in WORD_TALK and w not in in_names]
+        return list(dict.fromkeys(lead + words + names))[:2]
 
 
 class Wikidata(RemoteSource):
@@ -252,7 +398,7 @@ class Wikidata(RemoteSource):
                      "math", "musical-notation", "wikibase-lexeme", "wikibase-form", "wikibase-sense"}
 
     def fetch(self, question: str) -> list[Document]:
-        found = self.get_json(self.api, action="query", list="search", srsearch=" ".join(self.terms(question)),
+        found = self.get_json(self.api, action="query", list="search", srsearch=self.query(question),
                          srlimit=self.pool, srprop="", format="json", formatversion=2)
         ids = [hit["title"] for hit in found["query"]["search"] if re.fullmatch(r"Q\d+", hit["title"])]
         if names := self.names(question):
@@ -272,20 +418,26 @@ class Wikidata(RemoteSource):
         out: dict[str, dict] = {}
         for start in range(0, len(ids), 50):
             data = self.get_json(self.api, action="wbgetentities", ids="|".join(ids[start:start + 50]), props=props,
-                            languages="pt|en", format="json")
+                            languages="pt|pt-br|mul", format="json")
             out.update({k: v for k, v in data.get("entities", {}).items() if "missing" not in v})
         return out
 
     def _label(self, entity: dict, field: str = "labels") -> str:
         values = entity.get(field, {})
-        return (values.get("pt") or values.get("en") or {}).get("value", "")
+        # "mul" is a label that every language shares, such as the name of a person
+        return (values.get("pt") or values.get("pt-br") or values.get("mul") or {}).get("value", "")
 
     def _values(self, entity: dict):
-        for prop, claims in list(entity.get("claims", {}).items())[:self.max_properties]:
-            values = [c["mainsnak"] for c in claims if c["mainsnak"].get("snaktype") == "value"
+        """The properties with a value to state, each with its values, the preferred one first. A deprecated value
+        is wrong or out of date, so it is left out."""
+        kept = []
+        for prop, claims in entity.get("claims", {}).items():
+            claims = [c for c in claims if c.get("rank") != "deprecated" and c["mainsnak"].get("snaktype") == "value"
                       and c["mainsnak"].get("datatype") not in self.skipped_types]
-            if values:
-                yield prop, values[:self.max_values]
+            if claims:
+                claims.sort(key=lambda c: c.get("rank") != "preferred")
+                kept.append((prop, [c["mainsnak"] for c in claims[:self.max_values]]))
+        return kept[:self.max_properties]
 
     def _references(self, entity: dict):
         for prop, snaks in self._values(entity):
@@ -602,7 +754,7 @@ class Ipma(RemoteSource):
 
     @cached_property
     def places(self) -> dict[str, dict]:
-        return {p["local"].casefold(): p for p in self.get_json(f"{self.api}/distrits-islands.json")["data"]}
+        return {fold(p["local"]): p for p in self.get_json(f"{self.api}/distrits-islands.json")["data"]}
 
     @cached_property
     def weather_types(self) -> dict[int, str]:
@@ -616,7 +768,7 @@ class Ipma(RemoteSource):
 
     def fetch(self, question: str) -> list[Document]:
         # the longest tail that is a place: "Vila do Porto" is not also Porto
-        named = [next((t.casefold() for t in tails(name) if t.casefold() in self.places), "") for name in self.names(question)]
+        named = [next((fold(t) for t in tails(name) if fold(t) in self.places), "") for name in self.names(question)]
         places = list({key: self.places[key] for key in named if key}.values())[:self.pool]
         if not places:
             return []
@@ -860,28 +1012,28 @@ class Dgeg(RemoteSource):
 
     @cached_property
     def fuels(self) -> dict[str, int]:
-        return {f["Descritivo"].casefold(): f["Id"] for f in self.get_json(f"{self.api}/GetTiposCombustiveis")["resultado"]}
+        return {fold(f["Descritivo"]): f["Id"] for f in self.get_json(f"{self.api}/GetTiposCombustiveis")["resultado"]}
 
     @cached_property
     def municipalities(self) -> dict[str, dict]:
-        return {m["Descritivo"].casefold(): m for m in self.get_json(f"{self.api}/GetMunicipios")["resultado"]}
+        return {fold(m["Descritivo"]): m for m in self.get_json(f"{self.api}/GetMunicipios")["resultado"]}
 
     @cached_property
     def districts(self) -> dict[str, int]:
-        return {d["Descritivo"].casefold(): d["Id"] for d in self.get_json(f"{self.api}/GetDistritos")["resultado"]}
+        return {fold(d["Descritivo"]): d["Id"] for d in self.get_json(f"{self.api}/GetDistritos")["resultado"]}
 
     def fetch(self, question: str) -> list[Document]:
-        asked = question.casefold()
+        asked = fold(question)
         fuel = next((self.fuels[n] for n in self.fuels if n in asked), None)
-        fuel = fuel or next((self.fuels.get(FUELS[w].casefold()) for w in FUELS if re.search(rf"\b{w}\b", asked)), None)
+        fuel = fuel or next((self.fuels.get(fold(FUELS[w])) for w in FUELS if re.search(rf"\b{fold(w)}\b", asked)), None)
         if fuel is None:
             return []
         # every district shares its name with a municipality, so the district only when the question says so
         district_first = re.search(r"\bdistrito\b", asked)
         for name in self.names(question):
             for tail in tails(name):
-                town = self.municipalities.get(tail.casefold())
-                district = self.districts.get(tail.casefold())
+                town = self.municipalities.get(fold(tail))
+                district = self.districts.get(fold(tail))
                 if district is not None and (district_first or not town):
                     return self.stations(fuel, district, "")
                 if town:

@@ -260,3 +260,14 @@ def test_status_reports_retrieval_settings_and_an_injected_generator():
     assert body["retrieval"] == {"n_candidates": 3, "top_k": 2, "max_rounds": 4, "hybrid": False,
                                  "dedupe_threshold": None}
     assert body["generator_configured"] is True and body["sources"] == ["pt.wikipedia"]
+
+
+def test_sources_endpoint_reports_the_health_of_each_enabled_remote_source():
+    from test_sources import STOPWORDS, FakeHttp, wiki_route
+    from evidencia.sources import Wikipedia
+    wiki = Wikipedia(FakeHttp(wiki_route), STOPWORDS)
+    wiki.search("Lisboa", 2)
+    body = TestClient(create_app(engine=engine(sources={"pt.wikipedia": wiki}))).get("/v1/sources").json()["sources"]
+    by_name = {s["name"]: s for s in body}
+    assert by_name["pt.wikipedia"]["health"]["fetches"] == 1
+    assert by_name["wikidata"]["health"] is None
