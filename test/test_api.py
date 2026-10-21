@@ -224,7 +224,7 @@ def web():
                 return
             body = b"x " * 500_000 if self.path == "/big" else "Lisboa é a capital.".encode()
             self.send_response(200)
-            self.send_header("content-type", "text/plain; charset=utf-8")
+            self.send_header("content-type", "text/html" if self.path == "/bare" else "text/plain; charset=utf-8")
             self.end_headers()
             self.wfile.write(body)
 
@@ -242,3 +242,31 @@ def test_url_ingest_limits_size_and_refuses_redirects(web):
     assert ingest("/moved").status_code == 422
     r = c.post("/v1/collections/geo/documents", json={"source": "x", "url": "http://127.0.0.1:1/"})
     assert r.status_code == 502 and r.json() == {"detail": "could not fetch the URL"}
+
+
+def test_retrieve_marks_a_refused_passage_and_keeps_the_rest():
+    c = client_for()
+    c.post("/v1/collections/geo/documents", json={"source": "geo.txt", "text": DOC})
+    c.post("/v1/collections/geo/documents", json={"source": "huge.txt", "text": "ENORME capital " * 10})
+    r = c.post("/v1/retrieve", json={"collection": "geo", "question": Q, "k": 8})
+    assert r.status_code == 200 and r.json()["gates"] == "applied"
+    by_source = {p["source"]: p["p_select"] for p in r.json()["passages"]}
+    assert by_source["huge.txt"] is None and by_source["geo.txt"] is not None
+
+
+def test_failed_first_document_leaves_no_empty_collection():
+    c = client_for()
+    assert c.post("/v1/collections/geo/documents", json={"source": "x", "text": "   "}).status_code == 422
+    assert c.get("/v1/collections").json() == {}
+
+
+def test_every_gated_response_carries_the_select_threshold(client):
+    for path in ("/v1/context", "/v1/answer"):
+        assert client.post(path, json={"collection": "geo", "question": Q}).json()["select_threshold"] == 0.5
+
+
+def test_url_without_charset_is_utf8(web):
+    c = client_for(allow_url_ingest=True)
+    assert c.post("/v1/collections/geo/documents", json={"source": "p", "url": web + "/bare"}).status_code == 200
+    body = c.post("/v1/retrieve", json={"collection": "geo", "question": "capital", "k": 1}).json()
+    assert body["passages"][0]["text"] == "Lisboa é a capital."

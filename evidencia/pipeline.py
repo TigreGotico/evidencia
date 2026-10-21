@@ -36,6 +36,7 @@ class ContextResult:
     rounds: int
     sufficient: Verdict | None
     gated: bool                       # False when the decision backend was unavailable and fail_open applied
+    select_threshold: float = 0.5
     timings_ms: dict[str, float] = field(default_factory=dict)
 
     @property
@@ -47,6 +48,7 @@ class ContextResult:
                 "evidence": [p.as_dict() for p in self.evidence],
                 "candidates": [p.as_dict() for p in self.candidates],
                 "rounds": self.rounds,
+                "select_threshold": self.select_threshold,
                 "sufficient": self.sufficient.as_dict() if self.sufficient else None,
                 "gates": "applied" if self.gated else "unavailable",
                 "abstain": self.abstain,
@@ -70,6 +72,17 @@ class Evidencia:
                     raise KeyError(name)
                 self.collections[name] = Collection(name, lang=self.config.lang)
             return self.collections[name]
+
+    def add_document(self, name: str, content: str | bytes, source: str, fmt: str = "text") -> tuple[Collection, list[Passage]]:
+        """Add a document to a collection, making the collection only when the document has passages."""
+        with self._collections_lock:
+            col = self.collections.get(name)
+            if col is None:
+                col = Collection(name, lang=self.config.lang)
+                added = col.add(content, source, fmt)
+                self.collections[name] = col
+                return col, added
+        return col, col.add(content, source, fmt)
 
     def drop_collection(self, name: str) -> None:
         with self._collections_lock:
@@ -96,7 +109,7 @@ class Evidencia:
     def _ungated(self, question: str, collection: Collection, started: float) -> ContextResult:
         hits = [ScoredPassage(p) for p in collection.search(question, self.config.top_k)]
         return ContextResult(question, hits, hits, rounds=1, sufficient=None, gated=False,
-                             timings_ms={"total": (time.perf_counter() - started) * 1000})
+                             select_threshold=self.config.select_threshold, timings_ms={"total": (time.perf_counter() - started) * 1000})
 
     def _degrade(self, error: DecisionUnavailable, question: str, collection: Collection, started: float):
         if not self.config.fail_open:
@@ -125,7 +138,7 @@ class Evidencia:
                     break
                 t = time.perf_counter()
                 for p in new:
-                    scored[p.id] = ScoredPassage(p, self._select(question, p))
+                    scored[p.id] = ScoredPassage(p, self.select(question, p))
                 timings["select"] += (time.perf_counter() - t) * 1000
                 kept = [s for s in scored.values() if s.p_select is not None and s.p_select >= cfg.select_threshold]
                 previous = [s.passage.id for s in evidence]
@@ -151,9 +164,9 @@ class Evidencia:
         timings["total"] = (time.perf_counter() - started) * 1000
         candidates = sorted(scored.values(), key=lambda s: s.passage.score, reverse=True)
         return ContextResult(question, evidence, candidates, max(rounds, 1), sufficient, gated=True,
-                             timings_ms=timings)
+                             select_threshold=cfg.select_threshold, timings_ms=timings)
 
-    def _select(self, question: str, passage: Passage) -> float | None:
+    def select(self, question: str, passage: Passage) -> float | None:
         """P(select), or None when the model refuses the passage; a refused passage is never evidence."""
         try:
             return self.gates.select(question, passage.text)

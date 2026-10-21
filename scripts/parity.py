@@ -1,7 +1,7 @@
 """Compare a decision backend's answers with a stored reference, question by question.
 
     python scripts/parity.py dump  http://127.0.0.1:8008 out.json        # answers from a System One server
-    python scripts/parity.py check jaredpalmer/kev-0.8b out.json [fp32]  # same requests, in process
+    python scripts/parity.py check TigreGotico/jevasio-0.8b-v2 out.json [fp32]  # same requests, in process
 
 Prints the largest probability difference and exits non-zero above the tolerance.
 """

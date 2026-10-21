@@ -26,6 +26,7 @@ def test_threshold_out_of_range():
 
 def test_backend_selection():
     assert isinstance(Config().decision.build(), HttpDecision)
+    assert Config().decision.run == "TigreGotico/jevasio-0.8b-v2"
     local = Config(decision={"backend": "local", "run": "x/y"}).decision.build()
     assert isinstance(local, LocalDecision) and local.run == "x/y"
     with pytest.raises(ValueError):
