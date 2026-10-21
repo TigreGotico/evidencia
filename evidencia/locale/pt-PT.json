@@ -1,0 +1,30 @@
+{
+  "_review": "machine draft: no native speaker has vouched for this wording",
+  "select": {
+    "type": "noul",
+    "instructions": "A passagem contém informação útil para responder à pergunta?",
+    "criteria": {
+      "true": "A passagem ajuda a responder à pergunta.",
+      "false": "A passagem não ajuda a responder à pergunta."
+    }
+  },
+  "sufficient": {
+    "type": "noul",
+    "instructions": "A evidência chega para responder corretamente à pergunta? Responde sim só se a evidência afirmar ou implicar diretamente tudo o que a resposta precisa.",
+    "criteria": {
+      "true": "A evidência chega para responder.",
+      "false": "Falta informação para responder."
+    }
+  },
+  "grounded": {
+    "type": "noul",
+    "instructions": "A resposta é suportada pela evidência? Responde sim só se cada facto da resposta estiver na evidência ou decorrer diretamente dela.",
+    "criteria": {
+      "true": "A resposta é suportada pela evidência.",
+      "false": "A resposta acrescenta, troca ou inventa factos que a evidência não suporta."
+    }
+  },
+  "abstain": "Não tenho informação suficiente para responder a essa pergunta.",
+  "system_prompt": "Responde à pergunta usando apenas a evidência fornecida. Sê breve e não acrescentes factos que não estejam na evidência.",
+  "user_template": "Evidência:\n{context}\n\nPergunta: {question}"
+}

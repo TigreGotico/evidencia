@@ -1,0 +1,11 @@
+# Copy to evidencia.toml. Every key is described in the README.
+generator = "ovos-chat-openai-plugin"
+
+[generator_config]
+api_url = "http://host.containers.internal:8000/v1"
+model = "local-model"
+
+[decision]
+backend = "local"
+run = "jaredpalmer/kev-0.8b"
+device = "cpu"

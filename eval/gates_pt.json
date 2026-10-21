@@ -1,0 +1,412 @@
+{
+  "about": "pt-PT gate cases. Labels follow from the passage text: a passage helps when it states the fact asked; evidence is sufficient when it states every fact the answer needs; an answer is grounded when every fact in it is stated in the evidence. Labelled by hand by the author of the cases; not reviewed by a second person. The hard cases defeat word overlap: wrong answers reuse words of the evidence, unanswerable questions use only words the evidence contains, and answerable questions are paraphrased.",
+  "corpus": {
+    "c1": "Lisboa é a capital de Portugal e a maior cidade do país.",
+    "c2": "O rio Tejo nasce em Espanha, na serra de Albarracín, e desagua no oceano Atlântico, em Lisboa.",
+    "c3": "A Torre de Belém foi construída entre 1514 e 1520, durante o reinado de D. Manuel I.",
+    "c4": "A Universidade de Coimbra foi fundada em 1290 pelo rei D. Dinis.",
+    "c5": "O Porto é a segunda maior cidade de Portugal e deu nome ao vinho do Porto.",
+    "c6": "O ponto mais alto de Portugal é a montanha do Pico, nos Açores, com 2351 metros.",
+    "c7": "Na Madeira, a cidade principal é o Funchal.",
+    "c8": "Fernando Pessoa nasceu em Lisboa em 1888 e escreveu sob vários heterónimos, como Álvaro de Campos.",
+    "c9": "O pastel de nata foi criado pelos monges do Mosteiro dos Jerónimos, em Belém.",
+    "c10": "O Mosteiro dos Jerónimos fica em Belém, junto ao rio Tejo.",
+    "c11": "Portugal aderiu à Comunidade Económica Europeia em 1986.",
+    "c12": "A ponte 25 de Abril liga Lisboa a Almada e foi inaugurada em 1966."
+  },
+  "answerable": [
+    {
+      "id": "q1",
+      "question": "Qual é a capital de Portugal?",
+      "gold": [
+        "c1"
+      ],
+      "distractor": "c5",
+      "right": "Lisboa.",
+      "wrong": "O Porto."
+    },
+    {
+      "id": "q2",
+      "question": "Em que ano foi fundada a Universidade de Coimbra?",
+      "gold": [
+        "c4"
+      ],
+      "distractor": "c3",
+      "right": "Em 1290.",
+      "wrong": "Em 1390."
+    },
+    {
+      "id": "q3",
+      "question": "Qual é o ponto mais alto de Portugal?",
+      "gold": [
+        "c6"
+      ],
+      "distractor": "c7",
+      "right": "A montanha do Pico, nos Açores.",
+      "wrong": "A Serra da Estrela."
+    },
+    {
+      "id": "q4",
+      "question": "Quem fundou a Universidade de Coimbra?",
+      "gold": [
+        "c4"
+      ],
+      "distractor": "c3",
+      "right": "O rei D. Dinis.",
+      "wrong": "O rei D. Manuel I."
+    },
+    {
+      "id": "q5",
+      "question": "Onde desagua o rio Tejo?",
+      "gold": [
+        "c2"
+      ],
+      "distractor": "c10",
+      "right": "No oceano Atlântico, em Lisboa.",
+      "wrong": "No mar Mediterrâneo."
+    },
+    {
+      "id": "q6",
+      "question": "Em que ano aderiu Portugal à Comunidade Económica Europeia?",
+      "gold": [
+        "c11"
+      ],
+      "distractor": "c12",
+      "right": "Em 1986.",
+      "wrong": "Em 1986, ao mesmo tempo que a Grécia."
+    },
+    {
+      "id": "q7",
+      "question": "Que cidades liga a ponte 25 de Abril?",
+      "gold": [
+        "c12"
+      ],
+      "distractor": "c2",
+      "right": "Lisboa e Almada.",
+      "wrong": "Lisboa e Setúbal."
+    },
+    {
+      "id": "q8",
+      "question": "Em que reinado foi construída a Torre de Belém?",
+      "gold": [
+        "c3"
+      ],
+      "distractor": "c10",
+      "right": "No reinado de D. Manuel I.",
+      "wrong": "No reinado de D. João II."
+    },
+    {
+      "id": "q9",
+      "question": "Qual é a cidade principal da Madeira?",
+      "gold": [
+        "c7"
+      ],
+      "distractor": "c6",
+      "right": "O Funchal.",
+      "wrong": "Ponta Delgada."
+    },
+    {
+      "id": "q10",
+      "question": "Em que cidade nasceu Fernando Pessoa?",
+      "gold": [
+        "c8"
+      ],
+      "distractor": "c1",
+      "right": "Em Lisboa.",
+      "wrong": "No Porto."
+    },
+    {
+      "id": "q11",
+      "question": "Quem criou o pastel de nata?",
+      "gold": [
+        "c9"
+      ],
+      "distractor": "c10",
+      "right": "Os monges do Mosteiro dos Jerónimos.",
+      "wrong": "Uma pastelaria de Belém, em 1837."
+    },
+    {
+      "id": "q12",
+      "question": "Qual é a segunda maior cidade de Portugal?",
+      "gold": [
+        "c5"
+      ],
+      "distractor": "c1",
+      "right": "O Porto.",
+      "wrong": "Braga."
+    },
+    {
+      "id": "q13",
+      "question": "Junto a que rio fica o mosteiro onde foi criado o pastel de nata?",
+      "gold": [
+        "c9",
+        "c10"
+      ],
+      "partial": [
+        "c9"
+      ],
+      "distractor": "c2",
+      "right": "O rio Tejo.",
+      "wrong": "O rio Douro."
+    },
+    {
+      "id": "q14",
+      "question": "Em que oceano desagua o rio que passa junto ao Mosteiro dos Jerónimos?",
+      "gold": [
+        "c10",
+        "c2"
+      ],
+      "partial": [
+        "c10"
+      ],
+      "distractor": "c9",
+      "right": "No oceano Atlântico.",
+      "wrong": "No oceano Índico."
+    }
+  ],
+  "wrong_evidence": [
+    {
+      "id": "w1",
+      "question": "Em que ano foi fundada a Universidade de Coimbra?",
+      "evidence": [
+        "c3"
+      ]
+    },
+    {
+      "id": "w2",
+      "question": "Onde desagua o rio Tejo?",
+      "evidence": [
+        "c1"
+      ]
+    }
+  ],
+  "unanswerable": [
+    {
+      "id": "u1",
+      "question": "Quantos habitantes tem Lisboa?",
+      "related": "c1"
+    },
+    {
+      "id": "u2",
+      "question": "Quem desenhou a Torre de Belém?",
+      "related": "c3"
+    },
+    {
+      "id": "u3",
+      "question": "Qual é o comprimento da ponte 25 de Abril?",
+      "related": "c12"
+    },
+    {
+      "id": "u4",
+      "question": "Em que ano morreu Fernando Pessoa?",
+      "related": "c8"
+    },
+    {
+      "id": "u5",
+      "question": "Qual é a altitude da Serra da Estrela?",
+      "related": "c6"
+    },
+    {
+      "id": "u6",
+      "question": "Quem foi o primeiro reitor da Universidade de Coimbra?",
+      "related": "c4"
+    },
+    {
+      "id": "u7",
+      "question": "Qual é a capital dos Açores?",
+      "related": "c6"
+    },
+    {
+      "id": "u8",
+      "question": "Quantos pastéis de nata se vendem por dia em Belém?",
+      "related": "c9"
+    },
+    {
+      "id": "u9",
+      "question": "Em que ano aderiu Portugal à NATO?",
+      "related": "c11"
+    },
+    {
+      "id": "u10",
+      "question": "Qual é a população do Funchal?",
+      "related": "c7"
+    },
+    {
+      "id": "u11",
+      "question": "Que heterónimos usou Fernando Pessoa além de Álvaro de Campos?",
+      "related": "c8"
+    },
+    {
+      "id": "u12",
+      "question": "Quanto custa um bilhete para a Torre de Belém?",
+      "related": "c3"
+    }
+  ],
+  "hard_grounding": [
+    {
+      "id": "h1",
+      "question": "Em que ano foi fundada a Universidade de Coimbra?",
+      "evidence": [
+        "c3",
+        "c4"
+      ],
+      "right": "Em 1290.",
+      "wrong": "Em 1514."
+    },
+    {
+      "id": "h2",
+      "question": "Quem fundou a Universidade de Coimbra?",
+      "evidence": [
+        "c3",
+        "c4"
+      ],
+      "right": "D. Dinis.",
+      "wrong": "D. Manuel I."
+    },
+    {
+      "id": "h3",
+      "question": "Qual é a segunda maior cidade de Portugal?",
+      "evidence": [
+        "c1",
+        "c5"
+      ],
+      "right": "O Porto.",
+      "wrong": "Lisboa."
+    },
+    {
+      "id": "h4",
+      "question": "Que cidades liga a ponte 25 de Abril?",
+      "evidence": [
+        "c12",
+        "c7"
+      ],
+      "right": "Lisboa e Almada.",
+      "wrong": "Lisboa e Funchal."
+    },
+    {
+      "id": "h5",
+      "question": "Onde nasce o rio Tejo?",
+      "evidence": [
+        "c2"
+      ],
+      "right": "Em Espanha, na serra de Albarracín.",
+      "wrong": "No oceano Atlântico."
+    },
+    {
+      "id": "h6",
+      "question": "Onde fica o ponto mais alto de Portugal?",
+      "evidence": [
+        "c6",
+        "c7"
+      ],
+      "right": "Nos Açores.",
+      "wrong": "Na Madeira."
+    },
+    {
+      "id": "h7",
+      "question": "Em que ano foi inaugurada a ponte 25 de Abril?",
+      "evidence": [
+        "c11",
+        "c12"
+      ],
+      "right": "Em 1966.",
+      "wrong": "Em 1986."
+    },
+    {
+      "id": "h8",
+      "question": "Quem criou o pastel de nata?",
+      "evidence": [
+        "c9",
+        "c8"
+      ],
+      "right": "Os monges do Mosteiro dos Jerónimos.",
+      "wrong": "Fernando Pessoa."
+    }
+  ],
+  "hard_sufficiency": [
+    {
+      "id": "s1",
+      "question": "Em que ano nasceu o rei D. Dinis?",
+      "evidence": [
+        "c4"
+      ],
+      "label": 0
+    },
+    {
+      "id": "s4",
+      "question": "Qual é a maior cidade de Espanha?",
+      "evidence": [
+        "c1",
+        "c2"
+      ],
+      "label": 0
+    },
+    {
+      "id": "s5",
+      "question": "Quem nasceu em Lisboa em 1966?",
+      "evidence": [
+        "c8",
+        "c12"
+      ],
+      "label": 0
+    },
+    {
+      "id": "s8",
+      "question": "Que rei criou o pastel de nata?",
+      "evidence": [
+        "c9",
+        "c4"
+      ],
+      "label": 0
+    },
+    {
+      "id": "s9",
+      "question": "Em que ano aderiu a Espanha à Comunidade Económica Europeia?",
+      "evidence": [
+        "c11",
+        "c2"
+      ],
+      "label": 0
+    },
+    {
+      "id": "p2",
+      "question": "Como se chama a principal cidade madeirense?",
+      "evidence": [
+        "c7"
+      ],
+      "label": 1
+    },
+    {
+      "id": "p3",
+      "question": "Quando entrou Portugal na CEE?",
+      "evidence": [
+        "c11"
+      ],
+      "label": 1
+    },
+    {
+      "id": "p4",
+      "question": "Qual é a altitude do Pico?",
+      "evidence": [
+        "c6"
+      ],
+      "label": 1
+    },
+    {
+      "id": "p5",
+      "question": "Quem é o autor que usou o nome Álvaro de Campos?",
+      "evidence": [
+        "c8"
+      ],
+      "label": 1
+    },
+    {
+      "id": "p6",
+      "question": "De que país vem o rio Tejo?",
+      "evidence": [
+        "c2"
+      ],
+      "label": 1
+    }
+  ]
+}

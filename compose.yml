@@ -1,0 +1,15 @@
+# The decision model runs inside the service (decision.backend = "local") and downloads to the models volume
+# on first use. Set EVIDENCIA_API_KEY before exposing the port beyond localhost.
+services:
+  evidencia:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      EVIDENCIA_CONFIG: /config/evidencia.toml
+      EVIDENCIA_API_KEY: ${EVIDENCIA_API_KEY:-}
+    volumes:
+      - ./evidencia.toml:/config/evidencia.toml:ro
+      - models:/models
+volumes:
+  models:
