@@ -8,6 +8,7 @@ import logging
 import queue
 import threading
 import time
+import uuid
 from importlib import resources
 from pathlib import PurePath
 from typing import Annotated, Literal
@@ -16,7 +17,7 @@ from curl_cffi import requests as curl
 from curl_cffi.const import CurlECode, CurlOpt
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from evidencia import __version__
 from evidencia.config import REQUEST_SIZES, THRESHOLDS, Config
@@ -49,16 +50,20 @@ class DocumentIn(BaseModel):
         return self
 
 
-class QuestionIn(BaseModel):
-    question: str = Field(min_length=1, max_length=MAX_QUESTION)
-    collection: str | None = Field(default=None, description="A local collection to search")
-    sources: list[str] = Field(default=[], description="Remote sources to search, from GET /v1/sources")
+class SettingsIn(BaseModel):
+    """The retrieval sizes and thresholds that a request may set for itself."""
     top_k: int | None = Field(default=None, ge=1, strict=True, description="Selected passages kept as evidence")
     n_candidates: int | None = Field(default=None, ge=1, strict=True, description="Passages retrieved in round one")
     max_rounds: int | None = Field(default=None, ge=1, strict=True, description="Rounds of widening at most")
     select_threshold: float | None = Field(default=None, ge=0, le=1, strict=True)
     sufficient_threshold: float | None = Field(default=None, ge=0, le=1, strict=True)
     grounded_threshold: float | None = Field(default=None, ge=0, le=1, strict=True)
+
+
+class QuestionIn(SettingsIn):
+    question: str = Field(min_length=1, max_length=MAX_QUESTION)
+    collection: str | None = Field(default=None, description="A local collection to search")
+    sources: list[str] = Field(default=[], description="Remote sources to search, from GET /v1/sources")
 
     @model_validator(mode="after")
     def somewhere(self):
@@ -73,6 +78,37 @@ class StreamIn(QuestionIn):
 
 class RetrieveIn(QuestionIn):
     k: int = Field(default=8, ge=1, le=100)
+
+
+class ContentPartIn(BaseModel):
+    type: str
+    text: str = ""
+
+
+class ChatMessageIn(BaseModel):
+    role: str
+    content: str | list[ContentPartIn] | None = None
+
+    def text(self) -> str:
+        if isinstance(self.content, list):
+            return " ".join(part.text for part in self.content if part.type == "text")
+        return self.content or ""
+
+
+class ChatCompletionIn(SettingsIn):
+    """An OpenAI chat completion request. ``model`` is ``evidencia`` or ``evidencia/<collection>``; the other
+    OpenAI fields, such as ``temperature``, are ignored."""
+    model: str
+    messages: list[ChatMessageIn] = Field(min_length=1)
+    stream: bool = False
+    sources: list[str] = Field(default=[], description="Remote sources to search, from GET /v1/sources")
+
+
+class VectorSearchIn(SettingsIn):
+    """An OpenAI vector store search request; the vector store is a collection."""
+    query: str | list[str]
+    max_num_results: int = Field(default=10, ge=1, le=50)
+    sources: list[str] = Field(default=[], description="Remote sources to search as well, from GET /v1/sources")
 
 
 class GroundingIn(BaseModel):
@@ -155,7 +191,13 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
 
-    def settings(body: QuestionIn) -> Config:
+    def question_from(body: SettingsIn, **fields) -> QuestionIn:
+        try:
+            return QuestionIn(**body.model_dump(include=set(SettingsIn.model_fields)), **fields)
+        except ValidationError as e:
+            raise HTTPException(422, "; ".join(err["msg"] for err in e.errors())) from None
+
+    def settings(body: SettingsIn) -> Config:
         """The configuration of this request: the server's, with the thresholds and sizes the body sets."""
         try:
             given = {name: getattr(body, name) for name in (*REQUEST_SIZES, *THRESHOLDS)}
@@ -306,11 +348,9 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
         check_targets(body)
         return engine.answer(body.question, body.collection, body.sources, settings=settings(body))
 
-    @app.post("/v1/answer/stream", dependencies=[Depends(auth)])
-    def answer_stream(body: StreamIn, request: Request):
-        """Server-sent events: one event per pipeline step, then ``result`` with the body of /v1/answer or /v1/context."""
-        check_targets(body)
-        cfg = settings(body)
+    def streamed(request: Request, work, frame) -> EventStream:
+        """Runs ``work(emit)`` in a thread and sends what ``frame`` makes of each event as server-sent events.
+        ``work`` returns the result, sent as the ``result`` event; a failure is sent as the ``error`` event."""
         events: queue.Queue = queue.Queue()
         left = threading.Event()    # the client closed the stream
 
@@ -321,12 +361,7 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
 
         def run():
             try:
-                if body.generate:
-                    result = engine.answer(body.question, body.collection, body.sources, on_event=emit, settings=cfg)
-                else:
-                    result = engine.context(body.question, body.collection, body.sources, on_event=emit,
-                                            settings=cfg).as_dict()
-                events.put(("result", result))
+                events.put(("result", work(emit)))
             except StreamClosed:
                 LOG.info("answer stream closed by the client; stopped")
             except DecisionUnavailable as e:
@@ -356,10 +391,89 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
                     continue
                 if item is None:
                     return
-                name, data = item
-                yield f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                if text := frame(*item):
+                    yield text
 
         return EventStream(stream(), left)
+
+    @app.post("/v1/answer/stream", dependencies=[Depends(auth)])
+    def answer_stream(body: StreamIn, request: Request):
+        """Server-sent events: one event per pipeline step, then ``result`` with the body of /v1/answer or /v1/context."""
+        check_targets(body)
+        cfg = settings(body)
+
+        def work(emit):
+            if body.generate:
+                return engine.answer(body.question, body.collection, body.sources, on_event=emit, settings=cfg)
+            return engine.context(body.question, body.collection, body.sources, on_event=emit, settings=cfg).as_dict()
+
+        return streamed(request, work, lambda name, data: f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n")
+
+    @app.post("/v1/chat/completions", dependencies=[Depends(auth)])
+    def chat_completions(body: ChatCompletionIn, request: Request):
+        """The gated answer as an OpenAI chat completion. The ``evidencia`` field holds the gates and the evidence.
+        An abstention is a normal reply with the locale's abstain text. A stream sends the answer as one chunk,
+        because the grounded gate checks the whole answer before any of it is sent."""
+        family, _, collection = body.model.partition("/")
+        if family != "evidencia":
+            raise HTTPException(404, f"no model {body.model!r}; use evidencia or evidencia/<collection>")
+        users = [m for m in body.messages if m.role == "user"]
+        if not users:
+            raise HTTPException(422, "the messages hold no user message")
+        q = question_from(body, question=users[-1].text(), collection=collection or None, sources=body.sources)
+        check_targets(q)
+        cfg = settings(body)
+        reply_id, created = f"chatcmpl-{uuid.uuid4().hex}", int(time.time())
+
+        def side(result: dict) -> dict:
+            return {"gates": result["gates"], "abstained": result["answer"] is None,
+                    "abstained_at": result["abstained_at"], "evidence": result["evidence"], "cited": result["cited"],
+                    "grounded": result["grounded"]}
+
+        def content(result: dict) -> str:
+            return result["answer"] if result["answer"] is not None else result["message"]
+
+        if not body.stream:
+            result = engine.answer(q.question, q.collection, q.sources, settings=cfg)
+            return {"id": reply_id, "object": "chat.completion", "created": created, "model": body.model,
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": content(result)},
+                                 "finish_reason": "stop"}],
+                    "evidencia": side(result)}
+
+        def chunk(delta: dict, finish: str | None, **extra) -> str:
+            data = {"id": reply_id, "object": "chat.completion.chunk", "created": created, "model": body.model,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}], **extra}
+            return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        def frame(name: str, data: dict) -> str | None:
+            if name == "error":
+                error = {"message": data["detail"], "type": "server_error", "code": data["status"]}
+                return f"data: {json.dumps({'error': error}, ensure_ascii=False)}\n\n"
+            if name != "result":
+                return None
+            return (chunk({"role": "assistant", "content": content(data)}, None)
+                    + chunk({}, "stop", evidencia=side(data)) + "data: [DONE]\n\n")
+
+        return streamed(request, lambda emit: engine.answer(q.question, q.collection, q.sources, on_event=emit,
+                                                             settings=cfg), frame)
+
+    @app.post("/v1/vector_stores/{collection}/search", dependencies=[Depends(auth)])
+    def vector_store_search(collection: str, body: VectorSearchIn):
+        """The passages that pass the select gate, as an OpenAI vector store search. ``score`` is the select
+        probability. An abstention returns no passages, and without the decision backend the request fails."""
+        queries = [body.query] if isinstance(body.query, str) else body.query
+        q = question_from(body, question=" ".join(queries), collection=collection, sources=body.sources)
+        check_targets(q)
+        ctx = engine.context(q.question, q.collection, q.sources, settings=settings(body))
+        if not ctx.gated:
+            raise HTTPException(503, "decision backend unavailable")
+        evidence = [] if ctx.abstain else ctx.evidence[:body.max_num_results]
+        return {"object": "vector_store.search_results.page", "search_query": queries,
+                "data": [{"file_id": s.passage.source, "filename": s.passage.source, "score": s.p_select,
+                          "attributes": {"passage_id": s.passage.id, "url": s.passage.url, "origin": s.passage.origin},
+                          "content": [{"type": "text", "text": s.passage.text}]} for s in evidence],
+                "has_more": False, "next_page": None,
+                "evidencia": {"abstained": ctx.abstain, "abstained_at": ctx.abstained_at}}
 
     @app.post("/v1/systemone", dependencies=[Depends(auth)])
     def systemone(body: dict):
