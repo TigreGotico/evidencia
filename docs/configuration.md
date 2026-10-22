@@ -24,7 +24,7 @@ device = "cpu"
 
 Put the top-level settings above the first `[table]` line. In TOML, a setting below `[generator_config]` belongs to that table, and evidencia then stops with `unknown generator_config keys`.
 
-An unknown key stops the service when it starts, with an error that names the key. So does a threshold that is not a number from 0 to 1, a count that is not a positive integer, an empty `api_key`, an unknown source, a `dedupe_threshold` without `embedding_model`, and a preset that needs a key or a model that is not set.
+An unknown key stops the service when it starts, with an error that names the key. So does a threshold that is not a number from 0 to 1, a count that is not a positive integer, an empty `api_key`, an unknown source, a `dedupe_threshold` without `embedding_model` or `embedder`, both `embedder` and `embedding_model`, an `embedder` plugin that is not installed, an embedding model that cannot load, and a preset that needs a key or a model that is not set.
 
 ## Settings
 
@@ -49,7 +49,9 @@ An unknown key stops the service when it starts, with an error that names the ke
 | `max_document_bytes` | `20000000` | Largest document accepted, in bytes |
 | `data_dir` | none | Folder that keeps the collections across restarts. Without it, collections are in memory. Refer to [Documents](documents.md) |
 | `embedding_model` | none | A model2vec model for hybrid retrieval, for example `minishlab/potion-multilingual-128M`. Without it, retrieval is BM25 only. Needs the `hybrid` extra |
-| `dedupe_threshold` | none | Drops a candidate whose embedding has this cosine similarity, or more, to an earlier candidate. More than 0 and not more than 1. Needs `embedding_model` |
+| `embedder` | none | A text embeddings plugin for hybrid retrieval, instead of `embedding_model`, for example `ovos-m2v-embeddings-plugin`. Refer to [Documents](documents.md#embedding-plugins) |
+| `embedder_config` | `{}` | Settings for the `embedder` plugin |
+| `dedupe_threshold` | none | Drops a candidate whose embedding has this cosine similarity, or more, to an earlier candidate. More than 0 and not more than 1. Needs `embedding_model` or `embedder` |
 | `sources` | `[]` | Public sources that a request can name. Refer to [Public sources](sources.md) |
 | `user_agent` | `evidencia/<version> (https://github.com/TigreGotico/evidencia)` | User-Agent sent to the public sources. Add your contact information |
 | `source_timeout` | `10` | Seconds to wait for each request to a public source |

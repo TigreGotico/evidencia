@@ -13,7 +13,7 @@ import requests
 
 from evidencia.config import Config
 from evidencia.decision import BATCH, Decision, DecisionRejected, DecisionUnavailable
-from evidencia.embeddings import Embedder
+from evidencia.embeddings import Embedder, PluginEmbedder
 from evidencia.generators import PRESETS, build_generator
 from evidencia.gates import Gates, Verdict
 from evidencia.index import Collection, Passage
@@ -120,8 +120,13 @@ class Evidencia:
         self._chat = chat
         self._chat_lock = threading.Lock()
         self._collections_lock = threading.Lock()
-        self.embed = Embedder(self.config.embedding_model) if self.config.embedding_model else None
-        self.store = Store(self.config.data_dir) if self.config.data_dir else None
+        if self.config.embedder:
+            self.embed = PluginEmbedder(self.config.embedder, self.config.embedder_config)
+        else:
+            self.embed = Embedder(self.config.embedding_model) if self.config.embedding_model else None
+        width = self.embed.load() if self.embed else None
+        self.store = Store(self.config.data_dir, self.embed.id if self.embed else None,
+                           width) if self.config.data_dir else None
         self.collections: dict[str, Collection] = self.store.load(self.embed) if self.store else {}
         if sources is None:
             sources = build_sources(self.config.sources, self.config.user_agent,
@@ -144,14 +149,16 @@ class Evidencia:
         """Add a document to a collection, making the collection only when the document has passages."""
         with self._collections_lock:
             col = self.collections.get(name)
-            if col is None:
-                col = Collection(name, lang=self.config.lang, embed=self.embed)
-                added = col.add(content, source, fmt, url)
-                self.collections[name] = col
-            else:
-                added = None
-        if added is None:
-            added = col.add(content, source, fmt, url)
+        if col is None:
+            # embedded outside the lock, so other requests are not held while a large document is embedded
+            fresh = Collection(name, lang=self.config.lang, embed=self.embed)
+            added = fresh.add(content, source, fmt, url)
+            with self._collections_lock:
+                col = self.collections.setdefault(name, fresh)
+            if col is fresh:
+                self._save(col)
+                return col, added
+        added = col.add(content, source, fmt, url)
         self._save(col)
         return col, added
 

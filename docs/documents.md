@@ -16,6 +16,8 @@ evidencia writes each collection to one JSON file in that folder, after each cha
 
 A relative `data_dir` is relative to the folder where the service starts.
 
+With hybrid retrieval, evidencia also writes the embeddings of each collection to `<name>.vectors.npz`, next to its JSON file. The file names the embedder that made them and the passages they belong to. At start, evidencia loads the stored embeddings and does not embed the passages again. It embeds a collection again when the embedder or its settings changed, or when the file does not match the passages, and then saves the new embeddings for the next start. A key or token in `embedder_config` is not part of the embedder's settings, so a new key does not embed the collections again.
+
 ## Formats
 
 | Format | How evidencia splits it |
@@ -87,7 +89,22 @@ embedding_model = "minishlab/potion-multilingual-128M"
 
 evidencia then ranks the passages twice: by BM25, and by the similarity of their embeddings to the question. It adds the two rankings with reciprocal-rank fusion. A passage in rank *r* of one ranking adds `1 / (60 + r)` to its score. Hybrid retrieval finds a passage that has the meaning of the question in other words, for example "população" for "habitantes". Every passage gets a score, so hybrid retrieval always returns candidates when the collection has passages.
 
-The `hybrid` extra installs model2vec. The model is a static embedding model of about 500 MB. It runs on the CPU and needs no GPU. It downloads to the Hugging Face cache on first use.
+The `hybrid` extra installs model2vec. The model is a static embedding model of about 500 MB. It runs on the CPU and needs no GPU. It downloads to the Hugging Face cache, and it loads when the service starts. A model that cannot load stops the start.
+
+An added document is embedded once, and only its own passages are embedded. Questions to the collection continue while a document is embedded. They use the passages from before the document, until the new index is ready.
+
+### Embedding plugins
+
+`embedder` names a text embeddings plugin instead of the built-in model2vec model. `embedder_config` holds the plugin's settings:
+
+```toml
+embedder = "ovos-m2v-embeddings-plugin"
+
+[embedder_config]
+model = "minishlab/potion-multilingual-128M"
+```
+
+`ovos-m2v-embeddings-plugin` comes with the `ovos-m2v-pipeline` package and runs a model2vec model in the same process. Install the package of the plugin in the same environment as evidencia. At start, evidencia embeds one text with the plugin. A plugin name that is not installed, or a plugin that cannot embed, stops the start. Set `embedder` or `embedding_model`, not both. evidencia sends each document to the plugin as one batch, and it normalises the vectors that come back.
 
 The [gates](gates.md) then decide which passages to use.
 
@@ -102,7 +119,7 @@ embedding_model = "minishlab/potion-multilingual-128M"
 dedupe_threshold = 0.95
 ```
 
-evidencia compares the embedding of each candidate with the candidates before it in the same question. It drops a candidate when the cosine similarity is equal to or more than the threshold. The select gate does not score a dropped candidate, and `duplicates` in the `sources` report counts it. The setting needs `embedding_model`, and its value must be more than 0 and not more than 1. A value of 0.95 drops near-identical text only.
+evidencia compares the embedding of each candidate with the candidates before it in the same question. It drops a candidate when the cosine similarity is equal to or more than the threshold. The select gate does not score a dropped candidate, and `duplicates` in the `sources` report counts it. The setting needs `embedding_model` or `embedder`, and its value must be more than 0 and not more than 1. A value of 0.95 drops near-identical text only.
 
 ---
 [← Chat models](generators.md) · [Home](index.md) · [Public sources →](sources.md)

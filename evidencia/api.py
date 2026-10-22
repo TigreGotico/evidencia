@@ -201,7 +201,7 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
                 "thresholds": {"select": config.select_threshold, "sufficient": config.sufficient_threshold,
                                "grounded": config.grounded_threshold},
                 "retrieval": {"n_candidates": config.n_candidates, "top_k": config.top_k,
-                              "max_rounds": config.max_rounds, "hybrid": bool(config.embedding_model),
+                              "max_rounds": config.max_rounds, "hybrid": config.hybrid,
                               "dedupe_threshold": config.dedupe_threshold},
                 "sources": sorted(engine.sources),
                 "collections": len(engine.collections_snapshot())}

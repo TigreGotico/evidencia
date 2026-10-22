@@ -63,6 +63,8 @@ class Config:
     browserless_url: str | None = None                 # a browserless that the browserless transport loads pages with
     data_dir: str | None = None                        # keep collections on disk here; in memory when unset
     embedding_model: str | None = None                 # model2vec model for hybrid retrieval; BM25 only when unset
+    embedder: str | None = None                        # an OPM text embeddings plugin, instead of embedding_model
+    embedder_config: dict[str, Any] = field(default_factory=dict)
     dedupe_threshold: float | None = None              # drop a candidate this similar to one already seen
     ui: bool = True                                    # serve the demo page at /
 
@@ -89,13 +91,22 @@ class Config:
             if isinstance(self.dedupe_threshold, bool) or not isinstance(self.dedupe_threshold, (int, float)) \
                     or not 0.0 < self.dedupe_threshold <= 1.0:
                 raise ValueError(f"dedupe_threshold must be a number in (0, 1], got {self.dedupe_threshold!r}")
-            if not self.embedding_model:
-                raise ValueError("dedupe_threshold needs embedding_model")
+            if not self.hybrid:
+                raise ValueError("dedupe_threshold needs embedding_model or embedder")
+        if self.embedder and self.embedding_model:
+            raise ValueError("set embedder or embedding_model, not both")
+        if not isinstance(self.embedder_config, dict):
+            raise ValueError(f"embedder_config must be a table, got {self.embedder_config!r}")
         if self.transport is not None and self.transport not in TRANSPORTS:
             raise ValueError(f"transport must be one of {sorted(TRANSPORTS)}, got {self.transport!r}")
         if isinstance(self.source_timeout, bool) or not isinstance(self.source_timeout, (int, float)) \
                 or self.source_timeout <= 0:
             raise ValueError(f"source_timeout must be a number of seconds above 0, got {self.source_timeout!r}")
+
+    @property
+    def hybrid(self) -> bool:
+        """Whether retrieval fuses BM25 with embeddings."""
+        return bool(self.embedder or self.embedding_model)
 
     def for_request(self, **settings: float | int | None) -> Config:
         """This configuration with the thresholds and sizes that one request sets. A request may make a gate

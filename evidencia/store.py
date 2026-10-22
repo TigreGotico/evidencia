@@ -1,4 +1,9 @@
-"""Collections on disk: one JSON file per collection, rewritten whole after every change."""
+"""Collections on disk: one JSON file per collection, rewritten whole after every change.
+
+With hybrid retrieval, ``<stem>.vectors.npz`` next to it holds one embedding row per passage, the embedder id and a
+digest of the passage ids. A restart loads the rows only when the embedder, the digest of the JSON's passages
+and the vector width all match, so a crash between the two writes cannot pair passages with other rows.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -13,12 +18,14 @@ from evidencia.index import Collection, Embed, Passage
 
 LOG = logging.getLogger("evidencia")
 
-MAX_STEM = 200     # leaves room for ".json.tmp" in a 255-byte file name
+MAX_STEM = 200     # leaves room for ".vectors.npz.tmp" in a 255-byte file name
 
 
 class Store:
-    def __init__(self, path: str | os.PathLike):
+    def __init__(self, path: str | os.PathLike, embedder_id: str | None = None, width: int | None = None):
         self.path = Path(path)
+        self.embedder_id = embedder_id
+        self.width = width
         self.path.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
 
@@ -30,18 +37,31 @@ class Store:
             stem = f"{stem[:MAX_STEM - 17]}-{hashlib.sha256(name.encode()).hexdigest()[:16]}"
         return self.path / f"{stem}.json"
 
+    def _vectors_file(self, name: str) -> Path:
+        return self._file(name).with_suffix(".vectors.npz")
+
     def save(self, collection: Collection) -> None:
+        import numpy as np
         with self._lock:
             # the state is read inside the lock, so the last write always holds the newest state
-            data = json.dumps(collection.as_dict(), ensure_ascii=False)
-            target = self._file(collection.name)
+            passages, vectors = collection.state()
+            data = collection.as_dict(passages)
+            target, vectors_file = self._file(collection.name), self._vectors_file(collection.name)
+            if vectors is not None and self.embedder_id:
+                tmp = vectors_file.with_name(vectors_file.name + ".tmp")
+                with open(tmp, "wb") as f:
+                    np.savez(f, vectors=vectors, embedder=np.array(self.embedder_id), ids=np.array(_digest(passages)))
+                os.replace(tmp, vectors_file)
+            else:
+                vectors_file.unlink(missing_ok=True)
             tmp = target.with_name(target.name + ".tmp")
-            tmp.write_text(data, encoding="utf-8")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             os.replace(tmp, target)
 
     def delete(self, name: str) -> None:
         with self._lock:
             self._file(name).unlink(missing_ok=True)
+            self._vectors_file(name).unlink(missing_ok=True)
 
     def load(self, embed: Embed | None = None) -> dict[str, Collection]:
         collections = {}
@@ -56,5 +76,30 @@ class Store:
                 LOG.error("collection file %s cannot be read (%s); moved to %s", path, e, aside)
                 path.replace(aside)
                 continue
-            collections[name] = Collection(name, lang, passages, embed)
+            stored = self._stored_vectors(name, passages) if embed else None
+            collections[name] = col = Collection(name, lang, passages, embed, stored)
+            if stored is None and col.vectors is not None:
+                self.save(col)      # embedded at this start; the next start reads the rows
         return collections
+
+    def _stored_vectors(self, name: str, passages: list[Passage]):
+        """The saved rows, when the same embedder made them for these passages; otherwise None."""
+        import numpy as np
+        path = self._vectors_file(name)
+        if not path.exists():
+            return None
+        try:
+            with np.load(path) as stored:
+                if str(stored["embedder"]) != self.embedder_id or str(stored["ids"]) != _digest(passages):
+                    return None
+                vectors = stored["vectors"]
+        except (OSError, ValueError, KeyError) as e:
+            LOG.warning("vectors of %s cannot be read (%s); embedding the passages again", path, e)
+            return None
+        if vectors.ndim != 2 or len(vectors) != len(passages) or (self.width and vectors.shape[1] != self.width):
+            return None
+        return vectors
+
+
+def _digest(passages: list[Passage]) -> str:
+    return hashlib.sha256("\0".join(p.id for p in passages).encode()).hexdigest()

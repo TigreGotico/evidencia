@@ -210,12 +210,24 @@ def test_deleting_a_document_through_the_api_is_saved(tmp_path):
     assert json.loads((tmp_path / "geo.json").read_text())["passages"] == []
 
 
-def test_near_duplicates_are_dropped_before_the_select_gate():
+class ConceptEmbedder:
+    def __init__(self, model):
+        self.id = f"concept:{model}"
+
+    def load(self):
+        pass
+
+    def __call__(self, texts):
+        return concept_embed(texts)
+
+
+def test_near_duplicates_are_dropped_before_the_select_gate(monkeypatch):
     """Copies of one statement cost no decision call and cannot fill the evidence."""
+    from evidencia import pipeline
+    monkeypatch.setattr(pipeline, "Embedder", ConceptEmbedder)
     decision = StubDecision(keyword="vinho")
     e = Evidencia(Config(n_candidates=4, max_rounds=1, embedding_model="fake", dedupe_threshold=0.95),
                   decision=decision, chat=StubChat(), sources={})
-    e.embed = concept_embed
     copies = "\n\n".join(f"A universidade de Coimbra é antiga, versão {i}." for i in range(3))
     e.add_document("geo", copies + "\n\nO vinho do Porto vem do Douro, junto à universidade.", "big.txt")
     ctx = e.context("universidade vinho", "geo")
