@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Callable, Iterable, Sequence
@@ -128,9 +129,11 @@ class Evidencia:
             self.embed = Embedder(self.config.embedding_model) if self.config.embedding_model else None
         width = self.embed.load() if self.embed else None
         self.vector_db = self._vector_db(width) if self.config.vector_db else None
+        # services that share a database server keep apart by their data_dir; without one nothing persists
+        self.db_namespace = os.path.realpath(self.config.data_dir) if self.config.data_dir else uuid.uuid4().hex
         self.store = Store(self.config.data_dir, self.embed.id if self.embed else None,
                            width) if self.config.data_dir else None
-        self.collections: dict[str, Collection] = self.store.load(self.embed, self.vector_db) if self.store else {}
+        self.collections: dict[str, Collection] = self.store.load(self.embed, self.vector_db, self.db_namespace) if self.store else {}
         if sources is None:
             sources = build_sources(self.config.sources, self.config.user_agent,
                                     frozenset(self.gates.locale.get("stopwords", ())), self.config.lang,
@@ -151,7 +154,7 @@ class Evidencia:
         return plugin(config=config)
 
     def _new_collection(self, name: str) -> Collection:
-        db_name = db_collection_name(name, self.embed.id) if self.vector_db is not None else ""
+        db_name = db_collection_name(name, self.embed.id, self.db_namespace) if self.vector_db is not None else ""
         return Collection(name, lang=self.config.lang, embed=self.embed, db=self.vector_db, db_name=db_name)
 
     def collection(self, name: str, create: bool = False) -> Collection:
@@ -188,11 +191,12 @@ class Evidencia:
         return removed
 
     def drop_collection(self, name: str) -> None:
+        # under the lock: a collection of the same name created after the pop has the same database collection
         with self._collections_lock:
             col = self.collections.pop(name)
             if self.store:
                 self.store.delete(name)
-        col.drop()
+            col.drop()
 
     def _save(self, col: Collection) -> None:
         """Write ``col`` to the store, unless it was dropped while it changed."""

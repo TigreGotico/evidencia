@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import tempfile
 import threading
@@ -14,23 +15,25 @@ from ovos_bm25_solver import BM25CorpusSolver
 from ovos_document_chunkers import RegexParagraphSplitter
 from ovos_document_chunkers.files import PDFParagraphSplitter
 
+LOG = logging.getLogger("evidencia")
 FORMATS = ("text", "markdown", "html", "pdf")
 # a passage longer than this is split at word boundaries, so one paragraph cannot overflow the decision model
 MAX_PASSAGE_CHARS = 1500
 # reciprocal-rank-fusion constant: a passage ranked r by one retriever adds 1 / (RRF_K + r) to its score
 RRF_K = 60
 
-# the embedding hits a search asks a vector database for; RRF adds less than 1 / 260 for a rank below this
+# the embedding hits a search asks a vector database for. A passage below this rank gets no embedding score, and in
+# a collection of more than this many passages the fused ranking can differ from the ranking over vectors in memory
 DB_TOP_K = 200
 
 # texts in, one L2-normalised row per text out
 Embed = Callable[[Sequence[str]], "numpy.ndarray"]
 
 
-def db_collection_name(name: str, embedder_id: str) -> str:
-    """The vector-database collection of a collection: database names are short and plain, and rows from another
-    embedder are never mixed in."""
-    return "evidencia-" + hashlib.sha256(f"{name}\0{embedder_id}".encode()).hexdigest()[:32]
+def db_collection_name(name: str, embedder_id: str, namespace: str = "") -> str:
+    """The vector-database collection of a collection: database names are short and plain, rows from another
+    embedder are never mixed in, and two services that share a database server keep apart by ``namespace``."""
+    return "evidencia-" + hashlib.sha256(f"{namespace}\0{name}\0{embedder_id}".encode()).hexdigest()[:32]
 
 
 @dataclass(frozen=True)
@@ -158,8 +161,10 @@ class Collection:
         self._bm25: BM25CorpusSolver | None = None
         if self.embed is None or self.db is not None:
             self.vectors = None
-            if self.embed is not None and self.passages:
-                self._fill_db()
+            if self.embed is not None and self.db is not None:
+                self.db.create_collection(self.db_name)
+                if self.passages:
+                    self._fill_db()
         elif self.vectors is None or len(self.vectors) != len(self.passages):
             self.vectors = self.embed([p.text for p in self.passages]) if self.passages else None
         if self.passages:
@@ -207,12 +212,25 @@ class Collection:
             self.db.delete_embeddings_batch(ids, collection_name=self.db_name)
 
     def _fill_db(self) -> None:
-        """Embed the passages whose rows the database does not hold, after a restart or a lost write."""
-        held = set()
+        """Embed the passages whose rows the database does not hold, after a restart or a lost write. Rows that no
+        passage has, left by a write that the passage store never saved, push passages out of the hits a search
+        asks for: when the database holds more rows than there are passages, its collection is rebuilt from the
+        rows the passages have."""
+        held: dict[str, "numpy.ndarray"] = {}
         for start in range(0, len(self.passages), 1000):
             keys = [p.id for p in self.passages[start:start + 1000]]
-            held |= {hit[0] for hit in self.db.get_embeddings_batch(keys, collection_name=self.db_name)}
+            held.update((key, vector) for key, vector, *_ in
+                        self.db.get_embeddings_batch(keys, collection_name=self.db_name))
         missing = [p for p in self.passages if p.id not in held]
+        rows = self.db.count_embeddings_in_collection(self.db_name)
+        if rows > len(held):
+            LOG.info("%s: the vector database holds %d rows for %d passages; rebuilding it", self.name, rows, len(held))
+            self.db.delete_collection(self.db_name)
+            self.db.create_collection(self.db_name)
+            kept = [p for p in self.passages if p.id in held]
+            if kept:
+                self.db.add_embeddings_batch([p.id for p in kept], [held[p.id] for p in kept],
+                                             [{"source": p.source} for p in kept], collection_name=self.db_name)
         if missing:
             vectors = self.embed([p.text for p in missing])
             if len(vectors) != len(missing):
@@ -262,7 +280,8 @@ class Collection:
             position = {p.id: i for i, p in enumerate(passages)}
             # a fixed size, so rows of deleted passages cannot push out the passages of a small collection
             hits = self.db.query(query_vector, top_k=DB_TOP_K, collection_name=self.db_name)
-            similar = [position[hit[0]] for hit in hits if hit[0] in position]
+            # a database that stores a key twice returns it twice; each passage keeps its best rank only
+            similar = list(dict.fromkeys(position[hit[0]] for hit in hits if hit[0] in position))
         if similar is not None:
             fused: dict[int, float] = defaultdict(float)
             for rank, (i, _) in enumerate(ranked):

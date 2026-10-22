@@ -125,7 +125,11 @@ vector_db = "ovos-qdrant-embeddings-plugin"
 
 Without `host` or `path` in `vector_db_config`, the database keeps its files in `<data_dir>/vectors`. Without `data_dir`, set one of them. evidencia sets `vector_size` from the embedder, unless the configuration sets it.
 
-Each collection has its own database collection, named from the collection name and the embedder. A new embedder therefore starts with an empty database collection and never mixes vectors of two models. At start, evidencia asks the database which passages it holds, and embeds only the passages that it does not hold. A question uses the 200 nearest passages from the database, and fuses them with the BM25 ranking. Dropping a collection drops its database collection.
+Each collection has its own database collection. Its name comes from the collection name, the embedder and the full path of `data_dir`. A new embedder therefore starts with an empty database collection and never mixes vectors of two models. Two services that share a database server keep their collections apart. A service that moves its `data_dir` starts new database collections and embeds its passages again. Without `data_dir`, the passages do not persist, and each start uses new database collections.
+
+At start, evidencia asks the database which passages it holds, and embeds only the passages that it does not hold. When the database holds more rows than there are passages, evidencia rebuilds the database collection from the rows of its passages, without embedding them again. Such rows come from a write that stopped before evidencia saved the passages.
+
+A question uses the 200 nearest passages from the database, and fuses them with the BM25 ranking. Up to 200 passages, the ranking is the same as with the vectors in memory. In a larger collection, a passage below the 200 nearest gets no embedding score, so the ranking can differ. Dropping a collection drops its database collection.
 
 The JSON files in `data_dir` still hold the passages. BM25 needs them.
 
