@@ -187,3 +187,14 @@ def test_collections_survive_concurrent_creation(make_engine):
                 assert len(engine.collection(name).passages) == 4, trial
         finally:
             sys.setswitchinterval(old)
+
+
+
+def test_the_select_gate_asks_the_backend_once_per_round_for_all_its_candidates(make_engine):
+    decision = StubDecision()
+    engine = make_engine(decision=decision)
+    engine.collection("geo").add("ENORME capital " * 10, "huge.txt")    # the stub refuses this passage
+    ctx = engine.context(Q, "geo")
+    assert decision.batches == [len(ctx.candidates)] and decision.count("select") == len(ctx.candidates)
+    assert [s.passage.text for s in ctx.evidence] == [CAPITAL]
+    assert {s.passage.source: s.p_select for s in ctx.candidates}["huge.txt"] is None

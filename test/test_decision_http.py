@@ -151,3 +151,83 @@ def test_a_reply_of_the_wrong_shape_is_unavailable(reply, monkeypatch):
     monkeypatch.setattr(decision.session, "post", lambda *a, **k: Reply())
     with pytest.raises(DecisionUnavailable):
         decision.ask({"question": "q", "passage": "p"}, {"select": {}})
+
+
+@pytest.fixture
+def slow_server():
+    """A threaded server that takes 0.2 s per request and records how many requests it held at once."""
+    import time
+    from http.server import ThreadingHTTPServer
+    state = {"now": 0, "most": 0, "lock": threading.Lock(), "threads": set()}
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            with state["lock"]:
+                state["now"] += 1
+                state["most"] = max(state["most"], state["now"])
+            time.sleep(0.2)
+            with state["lock"]:
+                state["now"] -= 1
+            passage = body["state"]["passage"]
+            if passage == "longa":
+                data, status = b'{"detail": "state too long"}', 422
+            else:
+                data, status = json.dumps({"answers": {"select": {"type": "noul", "noul": len(passage) / 100}}}).encode(), 200
+            self.send_response(status)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    state["url"] = f"http://127.0.0.1:{httpd.server_port}"
+    yield state
+    httpd.shutdown()
+
+
+def test_many_select_questions_go_to_the_server_at_once_and_keep_their_order(slow_server):
+    from evidencia.decision import DecisionRejected
+    q = {"select": load_locale("pt-PT")["select"]}
+    passages = ["a" * n for n in range(1, 8)] + ["longa"]
+    answers = HttpDecision(slow_server["url"], workers=4).ask_many([({"question": "q", "passage": p}, q) for p in passages])
+    assert [a["select"]["noul"] for a in answers[:7]] == [n / 100 for n in range(1, 8)]
+    assert isinstance(answers[7], DecisionRejected)
+    assert slow_server["most"] == 4
+
+
+def test_the_local_backend_scores_many_states_in_one_pass_and_refuses_only_the_long_one(monkeypatch):
+    """The model calls are fakes: the real batch was compared with single calls on the checkpoint itself."""
+    import types
+    from evidencia import LocalDecision
+    from evidencia.decision import DecisionRejected
+
+    class Fake(LocalDecision):
+        passes = []
+
+        def _load(self):
+            return "tok", "model"
+
+        def _batch_probs(self, model, encs):
+            self.passes.append(len(encs))
+            return [[[1 - e["p"], e["p"]]] for e in encs]
+
+    def admit(model, tok, rec):
+        text = str(rec)
+        if "longa" in text:
+            raise ValueError("state too long")
+        return {"p": 0.25 if "um" in text else 0.75}
+
+    monkeypatch.setitem(sys.modules, "evidencia._vendor.kev.model", types.SimpleNamespace(admit=admit))
+    q = {"select": load_locale("pt-PT")["select"]}
+    backend = Fake("nobody/nothing")
+    answers = backend.ask_many([({"question": "q", "passage": p}, q) for p in ["um", "longa", "dois"]])
+    assert isinstance(answers[1], DecisionRejected)
+    assert [answers[0]["select"]["noul"], answers[2]["select"]["noul"]] == [0.25, 0.75]
+    assert Fake.passes == [2]

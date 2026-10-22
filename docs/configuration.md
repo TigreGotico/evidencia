@@ -37,6 +37,10 @@ An unknown key stops the service when it starts, with an error that names the ke
 | `n_candidates` | `8` | Passages retrieved in the first round. Each later round doubles it |
 | `top_k` | `4` | Selected passages kept as evidence |
 | `max_rounds` | `2` | Retrieval rounds before evidencia stops |
+| `max_request_top_k` | `16` | The largest `top_k` that a request can set |
+| `max_request_candidates` | `64` | The largest `n_candidates` that a request can set |
+| `max_request_rounds` | `4` | The largest `max_rounds` that a request can set |
+| `allow_lower_thresholds` | `false` | Lets a request set a gate threshold below the server value. A request can always set a higher one. Refer to [the API reference](api.md#questions) |
 | `fail_open` | `true` | When the decision backend is unavailable: `true` answers without gates, `false` returns 503. Refer to [Gates](gates.md) |
 | `generator` | `amalia` | The chat model that writes answers: a preset such as `amalia` or `anthropic`, or the plugin name of a chat engine, such as `ovos-chat-openai-plugin`. Refer to [Chat models](generators.md) |
 | `generator_config` | `{}` | Settings for the chat model: `api_url`, `model`, `key`, `max_tokens`, `temperature`, `timeout`, and `effort` for Claude. For a plugin, its own settings, and evidencia adds a `system_prompt` unless you set one |
@@ -68,6 +72,7 @@ These go in the `[decision]` table. Refer to [Decision models](decision-models.m
 | `key` | none | HTTP: bearer token for the decision server |
 | `model` | `kev-latest` | HTTP: model name sent in each request |
 | `timeout` | `30` | HTTP: seconds to wait for each reply |
+| `workers` | `4` | HTTP: select questions sent at the same time. A server that batches its requests answers them in one pass |
 
 The default backend is `http`. To run the default model inside the service, set `backend = "local"`.
 

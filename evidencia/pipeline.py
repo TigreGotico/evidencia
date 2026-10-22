@@ -12,7 +12,7 @@ from typing import Any, Callable, Iterable, Sequence
 import requests
 
 from evidencia.config import Config
-from evidencia.decision import Decision, DecisionRejected, DecisionUnavailable
+from evidencia.decision import BATCH, Decision, DecisionRejected, DecisionUnavailable
 from evidencia.embeddings import Embedder
 from evidencia.generators import PRESETS, build_generator
 from evidencia.gates import Gates, Verdict
@@ -249,23 +249,25 @@ class Evidencia:
             novel.append(passage)
         return novel
 
-    def _ungated(self, question: str, targets: list[Source], report: dict[str, dict], started: float) -> ContextResult:
+    def _ungated(self, question: str, targets: list[Source], report: dict[str, dict], started: float,
+                 cfg: Config) -> ContextResult:
         report = {name: {**r, "candidates": 0, "duplicates": 0} for name, r in report.items()}
-        hits = [ScoredPassage(p) for p in self._novel(self._search(targets, question, self.config.top_k, report),
+        hits = [ScoredPassage(p) for p in self._novel(self._search(targets, question, cfg.top_k, report),
                                                        [], report)]
         for s in hits:
             report[s.passage.origin]["candidates"] += 1
-        return ContextResult(question, hits[:self.config.top_k], hits, rounds=1, sufficient=None, gated=False,
-                             select_threshold=self.config.select_threshold,
+        return ContextResult(question, hits[:cfg.top_k], hits, rounds=1, sufficient=None, gated=False,
+                             select_threshold=cfg.select_threshold,
                              timings_ms={"total": (time.perf_counter() - started) * 1000},
                              sources=list(report.values()))
 
     def context(self, question: str, collection: str | None = None, sources: Sequence[str] = (),
-                on_event: EventSink | None = None) -> ContextResult:
-        """Retrieve candidates, keep the passages the select gate passes, and widen until the evidence is sufficient."""
+                on_event: EventSink | None = None, settings: Config | None = None) -> ContextResult:
+        """Retrieve candidates, keep the passages the select gate passes, and widen until the evidence is sufficient.
+        ``settings`` holds the thresholds and sizes of this request, from ``Config.for_request``."""
         targets = self.targets(collection, sources)
         emit = on_event or (lambda name, data: None)
-        cfg = self.config
+        cfg = settings or self.config
         started = time.perf_counter()
         report = self._report(targets, collection)
         scored: dict[tuple[str, str], ScoredPassage] = {}
@@ -288,10 +290,13 @@ class Evidencia:
                     break
                 emit("candidates", {"round": rounds, "passages": [asdict(p) for p in new]})
                 t = time.perf_counter()
-                for p in new:
-                    report[p.origin]["candidates"] += 1
-                    scored[_key(p)] = ScoredPassage(p, self.select(question, p))
-                    emit("select", {"round": rounds, **scored[_key(p)].as_dict()})
+                # one backend call per chunk, with its events after it, so a client that leaves stops the next chunk
+                for start in range(0, len(new), BATCH):
+                    chunk = new[start:start + BATCH]
+                    for p, p_select in zip(chunk, self.select_many(question, chunk)):
+                        report[p.origin]["candidates"] += 1
+                        scored[_key(p)] = ScoredPassage(p, p_select)
+                        emit("select", {"round": rounds, **scored[_key(p)].as_dict()})
                 timings["select"] += (time.perf_counter() - t) * 1000
                 kept = [s for s in scored.values() if s.p_select is not None and s.p_select >= cfg.select_threshold]
                 previous = [_key(s.passage) for s in evidence]
@@ -321,14 +326,15 @@ class Evidencia:
             if not cfg.fail_open:
                 raise
             LOG.warning("decision backend unavailable (%s); answering without gates", e)
-            result = self._ungated(question, targets, report, started)
+            result = self._ungated(question, targets, report, started, cfg)
             emit("gates_unavailable", {"candidates": [s.as_dict() for s in result.candidates]})
             return result
         timings["total"] = (time.perf_counter() - started) * 1000
         return ContextResult(question, evidence, list(scored.values()), max(rounds, 1), sufficient, gated=True,
                              select_threshold=cfg.select_threshold, timings_ms=timings, sources=list(report.values()))
 
-    def retrieve(self, question: str, collection: str | None = None, sources: Sequence[str] = (), k: int = 8) -> dict:
+    def retrieve(self, question: str, collection: str | None = None, sources: Sequence[str] = (), k: int = 8,
+                 settings: Config | None = None) -> dict:
         """Up to ``k`` passages from each target, with P(select) for each and no other gate."""
         targets = self.targets(collection, sources)
         report = self._report(targets, collection)
@@ -336,21 +342,26 @@ class Evidencia:
         for p in hits:
             report[p.origin]["candidates"] += 1
         try:
-            scored, gates = [ScoredPassage(p, self.select(question, p)) for p in hits], "applied"
+            scored, gates = [ScoredPassage(p, s) for p, s in zip(hits, self.select_many(question, hits))], "applied"
         except DecisionUnavailable:
             if not self.config.fail_open:
                 raise
             scored, gates = [ScoredPassage(p) for p in hits], "unavailable"
         return {"question": question, "passages": [s.as_dict() for s in scored], "gates": gates,
-                "select_threshold": self.config.select_threshold, "sources": list(report.values())}
+                "select_threshold": (settings or self.config).select_threshold, "sources": list(report.values())}
 
-    def select(self, question: str, passage: Passage) -> float | None:
-        """P(select), or None when the model refuses the passage; a refused passage is never evidence."""
-        try:
-            return self.gates.select(question, passage.text)
-        except DecisionRejected as e:
-            LOG.warning("decision model rejected passage %s from %s (%s); skipping it", passage.id, passage.source, e)
-            return None
+    def select_many(self, question: str, passages: list[Passage]) -> list[float | None]:
+        """P(select) of each passage, or None when the model refuses it; a refused passage is never evidence."""
+        if not passages:
+            return []
+        out = []
+        for passage, p in zip(passages, self.gates.select_many(question, [p.text for p in passages])):
+            if isinstance(p, DecisionRejected):
+                LOG.warning("decision model rejected passage %s from %s (%s); skipping it", passage.id, passage.source, p)
+                out.append(None)
+            else:
+                out.append(p)
+        return out
 
     def generate(self, question: str, evidence: list[str]) -> str:
         """The chat model's answer. It cites each fact as [n], the number of a passage in ``evidence``."""
@@ -380,14 +391,16 @@ class Evidencia:
             raise GeneratorUnavailable(f"{self.config.generator}: empty answer")
         return text.strip()
 
-    def check_grounding(self, question: str, evidence: list[str], answer: str) -> Verdict:
-        return Verdict(self.gates.grounded(question, evidence, answer), self.config.grounded_threshold)
+    def check_grounding(self, question: str, evidence: list[str], answer: str, threshold: float | None = None) -> Verdict:
+        return Verdict(self.gates.grounded(question, evidence, answer),
+                       self.config.grounded_threshold if threshold is None else threshold)
 
     def answer(self, question: str, collection: str | None = None, sources: Sequence[str] = (),
-               on_event: EventSink | None = None) -> dict:
+               on_event: EventSink | None = None, settings: Config | None = None) -> dict:
         """The full loop. ``answer`` is None when a gate abstains; ``abstained_at`` names the gate."""
         emit = on_event or (lambda name, data: None)
-        ctx = self.context(question, collection, sources, on_event)
+        cfg = settings or self.config
+        ctx = self.context(question, collection, sources, on_event, cfg)
         result = {**ctx.as_dict(), "answer": None, "draft": None, "cited": [], "grounded": None, "message": None}
         if ctx.abstained_at:
             result["message"] = self.gates.locale["abstain"]
@@ -404,7 +417,7 @@ class Evidencia:
         t = time.perf_counter()
         try:
             # the citation numbers are not facts, and the grounded question does not ask about them
-            grounded = self.check_grounding(question, texts, strip_citations(draft, len(texts)))
+            grounded = self.check_grounding(question, texts, strip_citations(draft, len(texts)), cfg.grounded_threshold)
         except DecisionUnavailable as e:
             if not self.config.fail_open:
                 raise
