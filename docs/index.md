@@ -45,6 +45,7 @@ Read the pages in this order. Each page links to the next one at its end.
 | [Agents](agents.md) | Connect Claude Desktop, Claude Code or OpenCode through MCP |
 | [Demo page](demo.md) | The web page that shows each gate decide |
 | [HTTP API](api.md) | Every endpoint, with request and response examples |
+| [OpenAI compatibility](openai-compat.md) | Chat completions and vector store search for OpenAI clients |
 | [Configuration](configuration.md) | Every setting and environment variable |
 | [Deployment](deployment.md) | Containers, AMALIA in compose, authentication and health checks |
 | [Python](python.md) | Use evidencia as a library |
