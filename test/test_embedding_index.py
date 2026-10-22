@@ -22,8 +22,11 @@ class CountingEmbedder:
         self.texts = []
         self.loads = 0
 
+    width = 3
+
     def load(self):
         self.loads += 1
+        return self.width
 
     def __call__(self, texts):
         self.texts += list(texts)
@@ -108,8 +111,10 @@ def test_a_different_embedder_re_embeds_on_restart(tmp_path, counting):
 
 def test_vectors_that_do_not_match_the_passages_are_rebuilt(tmp_path, counting):
     engine(tmp_path).add_document("geo", DOC, "geo.txt")
-    (vectors,) = tmp_path.glob("*.vectors.npy")
-    np.save(vectors, np.zeros((2, 3), dtype=np.float32))
+    (vectors,) = tmp_path.glob("*.vectors.npz")
+    stored = dict(np.load(vectors))
+    with open(vectors, "wb") as f:
+        np.savez(f, **{**stored, "vectors": np.zeros((2, 3), dtype=np.float32)})
     engine(tmp_path)
     assert len(counting[-1].texts) == 4
 
@@ -117,7 +122,7 @@ def test_vectors_that_do_not_match_the_passages_are_rebuilt(tmp_path, counting):
 def test_a_dropped_collection_leaves_no_vector_file(tmp_path, counting):
     e = engine(tmp_path)
     e.add_document("geo", DOC, "geo.txt")
-    assert list(tmp_path.glob("*.vectors.npy"))
+    assert list(tmp_path.glob("*.vectors.npz"))
     e.drop_collection("geo")
     assert list(tmp_path.iterdir()) == []
 
@@ -220,3 +225,79 @@ def test_embedder_and_embedding_model_are_not_both_set():
 
 def test_dedupe_accepts_an_embedder_plugin():
     assert Config(dedupe_threshold=0.9, embedder="ovos-fake-embeddings-plugin").embedder_config == {}
+
+
+def test_vectors_from_a_crash_between_the_two_writes_are_not_loaded(tmp_path, counting):
+    e = engine(tmp_path)
+    e.add_document("geo", "alpha bravo charlie.", "doc")
+    old_json = (tmp_path / "geo.json").read_text()
+    e.add_document("geo", "delta echo foxtrot.", "doc")
+    (tmp_path / "geo.json").write_text(old_json)     # the vector file was replaced, the JSON was not
+    restarted = engine(tmp_path)
+    assert counting[-1].texts == ["alpha bravo charlie."]
+    col = restarted.collection("geo")
+    assert np.allclose(col.vectors, CountingEmbedder("m")(["alpha bravo charlie."]))
+
+
+def test_vectors_rebuilt_at_start_are_saved_for_the_next_start(tmp_path, counting):
+    Evidencia(Config(data_dir=str(tmp_path)), decision=StubDecision(), chat=StubChat(),
+              sources={}).add_document("geo", DOC, "geo.txt")      # BM25 only: no vectors on disk
+    engine(tmp_path)
+    assert len(counting[-1].texts) == 4
+    engine(tmp_path)
+    assert counting[-1].texts == []
+
+
+def test_stored_vectors_of_another_width_are_rebuilt(tmp_path, counting, monkeypatch):
+    engine(tmp_path).add_document("geo", DOC, "geo.txt")
+
+    class Wider(CountingEmbedder):
+        width = 4
+
+        def __call__(self, texts):
+            v = super().__call__(texts)
+            return np.hstack([v, np.zeros((len(v), 1), dtype=np.float32)])
+    monkeypatch.setattr(pipeline_module, "Embedder", Wider)
+    col = engine(tmp_path).collection("geo")
+    assert col.vectors.shape == (4, 4)
+    assert col.search("capital de Portugal", 1)
+
+
+def test_an_embedder_that_returns_the_wrong_number_of_rows_leaves_the_collection_as_it_was():
+    class Short(CountingEmbedder):
+        def __call__(self, texts):
+            return super().__call__(texts)[:-1] if len(texts) > 1 else super().__call__(texts)
+    col = Collection("geo", embed=CountingEmbedder("m"))
+    col.add(DOC, "geo.txt")
+    col.embed = Short("m")
+    with pytest.raises(ValueError, match="rows"):
+        col.add(OTHER, "outro.txt")
+    assert len(col.passages) == len(col.vectors) == 4
+
+
+def test_a_configured_embedder_plugin_is_what_the_engine_uses(tmp_path, monkeypatch):
+    monkeypatch.setattr(embeddings_module, "load_text_embeddings_plugin", lambda name: FakeTextEmbedder)
+    e = Evidencia(Config(data_dir=str(tmp_path), embedder="ovos-fake-embeddings-plugin",
+                         embedder_config={"model": "x"}), decision=StubDecision(), chat=StubChat(), sources={})
+    e.add_document("geo", DOC, "geo.txt")
+    plugin = FakeTextEmbedder.instances[-1]
+    assert plugin.config == {"model": "x"}
+    assert [len(b) for b in plugin.batches] == [1, 4]       # the probe at start, then the document
+    assert e.collection("geo").vectors.shape == (4, 3)
+
+
+def test_an_embedder_plugin_that_cannot_embed_stops_the_start(monkeypatch):
+    class Broken(FakeTextEmbedder):
+        def get_embeddings_batch(self, texts):
+            raise OSError("LocalEntryNotFoundError: cannot reach the Hub")
+    monkeypatch.setattr(embeddings_module, "load_text_embeddings_plugin", lambda name: Broken)
+    with pytest.raises(OSError, match="cannot reach the Hub"):
+        Evidencia(Config(embedder="ovos-fake-embeddings-plugin"), decision=StubDecision(), chat=StubChat(),
+                  sources={})
+
+
+def test_the_api_key_is_not_part_of_the_embedder_id(monkeypatch):
+    monkeypatch.setattr(embeddings_module, "load_text_embeddings_plugin", lambda name: FakeTextEmbedder)
+    a = embeddings_module.PluginEmbedder("p", {"model": "x", "key": "old"})
+    b = embeddings_module.PluginEmbedder("p", {"model": "x", "key": "new"})
+    assert a.id == b.id

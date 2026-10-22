@@ -161,6 +161,8 @@ class Collection:
         with self._write_lock:
             keep = [i for i, p in enumerate(self.passages) if p.source != source]
             added = self.embed([p.text for p in new]) if self.embed else None
+            if added is not None and len(added) != len(new):
+                raise ValueError(f"{source}: the embedder returned {len(added)} rows for {len(new)} passages")
             self._swap([self.passages[i] for i in keep] + new, keep, added)
         return new
 

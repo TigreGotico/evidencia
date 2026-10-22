@@ -49,7 +49,7 @@ An unknown key stops the service when it starts, with an error that names the ke
 | `max_document_bytes` | `20000000` | Largest document accepted, in bytes |
 | `data_dir` | none | Folder that keeps the collections across restarts. Without it, collections are in memory. Refer to [Documents](documents.md) |
 | `embedding_model` | none | A model2vec model for hybrid retrieval, for example `minishlab/potion-multilingual-128M`. Without it, retrieval is BM25 only. Needs the `hybrid` extra |
-| `embedder` | none | A text embeddings plugin for hybrid retrieval, instead of `embedding_model`, for example `ovos-openai-embeddings-plugin`. Refer to [Documents](documents.md#embedding-plugins) |
+| `embedder` | none | A text embeddings plugin for hybrid retrieval, instead of `embedding_model`, for example `ovos-m2v-embeddings-plugin`. Refer to [Documents](documents.md#embedding-plugins) |
 | `embedder_config` | `{}` | Settings for the `embedder` plugin |
 | `dedupe_threshold` | none | Drops a candidate whose embedding has this cosine similarity, or more, to an earlier candidate. More than 0 and not more than 1. Needs `embedding_model` or `embedder` |
 | `sources` | `[]` | Public sources that a request can name. Refer to [Public sources](sources.md) |

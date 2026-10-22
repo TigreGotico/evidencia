@@ -124,9 +124,9 @@ class Evidencia:
             self.embed = PluginEmbedder(self.config.embedder, self.config.embedder_config)
         else:
             self.embed = Embedder(self.config.embedding_model) if self.config.embedding_model else None
-        if self.embed:
-            self.embed.load()
-        self.store = Store(self.config.data_dir, self.embed.id if self.embed else None) if self.config.data_dir else None
+        width = self.embed.load() if self.embed else None
+        self.store = Store(self.config.data_dir, self.embed.id if self.embed else None,
+                           width) if self.config.data_dir else None
         self.collections: dict[str, Collection] = self.store.load(self.embed) if self.store else {}
         if sources is None:
             sources = build_sources(self.config.sources, self.config.user_agent,

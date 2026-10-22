@@ -16,7 +16,7 @@ evidencia writes each collection to one JSON file in that folder, after each cha
 
 A relative `data_dir` is relative to the folder where the service starts.
 
-With hybrid retrieval, evidencia also writes the embeddings of each collection to `<name>.vectors.npy`, next to its JSON file. The JSON file names the embedder that made them. At start, evidencia loads the stored embeddings and does not embed the passages again. It embeds a collection again only when the embedder or its settings changed, or when the file does not match the passages.
+With hybrid retrieval, evidencia also writes the embeddings of each collection to `<name>.vectors.npz`, next to its JSON file. The file names the embedder that made them and the passages they belong to. At start, evidencia loads the stored embeddings and does not embed the passages again. It embeds a collection again when the embedder or its settings changed, or when the file does not match the passages, and then saves the new embeddings for the next start. A key or token in `embedder_config` is not part of the embedder's settings, so a new key does not embed the collections again.
 
 ## Formats
 
@@ -98,19 +98,13 @@ An added document is embedded once, and only its own passages are embedded. Ques
 `embedder` names a text embeddings plugin instead of the built-in model2vec model. `embedder_config` holds the plugin's settings:
 
 ```toml
-embedder = "ovos-openai-embeddings-plugin"
+embedder = "ovos-m2v-embeddings-plugin"
 
 [embedder_config]
-api_url = "http://localhost:11434/v1"
-model = "nomic-embed-text"
+model = "minishlab/potion-multilingual-128M"
 ```
 
-| Plugin | Package | Runs |
-| --- | --- | --- |
-| `ovos-m2v-embeddings-plugin` | `ovos-m2v-pipeline` | A model2vec model in the same process |
-| `ovos-openai-embeddings-plugin` | `ovos-openai-plugin` | A request to any server with an OpenAI-compatible `/v1/embeddings`, such as Ollama, llama.cpp or vLLM |
-
-Install the package of the plugin in the same environment as evidencia. A plugin name that is not installed stops the start. Set `embedder` or `embedding_model`, not both. evidencia sends each document to the plugin as one batch, and it normalises the vectors that come back.
+`ovos-m2v-embeddings-plugin` comes with the `ovos-m2v-pipeline` package and runs a model2vec model in the same process. Install the package of the plugin in the same environment as evidencia. At start, evidencia embeds one text with the plugin. A plugin name that is not installed, or a plugin that cannot embed, stops the start. Set `embedder` or `embedding_model`, not both. evidencia sends each document to the plugin as one batch, and it normalises the vectors that come back.
 
 The [gates](gates.md) then decide which passages to use.
 

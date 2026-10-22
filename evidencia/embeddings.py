@@ -2,7 +2,8 @@
 
 Each is an ``Embed``: ``embedder(texts)`` returns one L2-normalised float32 row per text. ``id`` names the model
 and its settings, so vectors kept on disk are reused only by the embedder that made them. ``load()`` makes the
-model ready, so the service loads it at start and a model that cannot load stops the start.
+model ready and returns the vector width. The service calls it at start, so a model that cannot load or embed
+stops the start.
 """
 from __future__ import annotations
 
@@ -12,6 +13,9 @@ import threading
 from typing import Any, Sequence
 
 from ovos_plugin_manager.embeddings import load_text_embeddings_plugin
+
+# settings that change no vector: a rotated key must not make every collection embed again
+SECRETS = frozenset({"key", "api_key", "token", "password"})
 
 
 def _normalised(vectors):
@@ -30,15 +34,18 @@ class Embedder:
         self._model = None
         self._lock = threading.Lock()
 
-    def load(self) -> None:
+    def _ready(self):
         with self._lock:
             if self._model is None:
                 from model2vec import StaticModel
                 self._model = StaticModel.from_pretrained(self.model_name)
+        return self._model
+
+    def load(self) -> int:
+        return self(["evidencia"]).shape[1]
 
     def __call__(self, texts: Sequence[str]):
-        self.load()
-        return _normalised(self._model.encode(list(texts)))
+        return _normalised(self._ready().encode(list(texts)))
 
 
 class PluginEmbedder:
@@ -49,11 +56,13 @@ class PluginEmbedder:
         if plugin is None:
             raise ValueError(f"text embeddings plugin {name!r} is not installed")
         self.engine = plugin(config=config)
-        settings = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()[:12]
+        kept = {k: v for k, v in config.items() if k not in SECRETS}
+        settings = hashlib.sha256(json.dumps(kept, sort_keys=True).encode()).hexdigest()[:12]
         self.id = f"{name}:{settings}"
 
-    def load(self) -> None:
-        """The plugin is built in ``__init__``; nothing is left to load."""
+    def load(self) -> int:
+        """Embed one text: a plugin may load its model, or reach its server, only on the first batch."""
+        return self(["evidencia"]).shape[1]
 
     def __call__(self, texts: Sequence[str]):
         return _normalised(self.engine.get_embeddings_batch(list(texts)))
