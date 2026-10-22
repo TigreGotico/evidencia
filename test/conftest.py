@@ -23,6 +23,17 @@ class StubDecision:
         self.reject = set(reject)       # gates whose request the model refuses, as for an overlong state
         self.down_for = set(down_for)   # gates for which the backend is unreachable
         self.calls = []
+        self.batches = []   # the size of each ask_many call
+
+    def ask_many(self, items):
+        self.batches.append(len(items))
+        out = []
+        for state, questions in items:
+            try:
+                out.append(self.ask(state, questions))
+            except DecisionRejected as e:
+                out.append(e)
+        return out
 
     def ask(self, state, questions):
         if self.down:

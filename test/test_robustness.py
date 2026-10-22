@@ -10,6 +10,7 @@ import uvicorn
 from conftest import DOC, StubChat, StubDecision
 from evidencia import Config, Evidencia, Passage
 from evidencia.api import create_app
+from evidencia.decision import BATCH
 from evidencia.index import Collection
 from evidencia.pipeline import strip_citations
 from evidencia.sources import ArquivoPt, SourceUnavailable, Wikipedia
@@ -138,8 +139,8 @@ class SlowDecision(StubDecision):
 
 def test_a_stream_that_the_client_leaves_stops_asking_the_decision_model():
     decision = SlowDecision()
-    engine = Evidencia(Config(n_candidates=60, max_rounds=1), decision=decision, chat=StubChat(), sources={})
-    engine.add_document("geo", "\n\n".join(f"Lisboa é a capital número {i}." for i in range(60)), "geo.txt")
+    engine = Evidencia(Config(n_candidates=200, max_rounds=1), decision=decision, chat=StubChat(), sources={})
+    engine.add_document("geo", "\n\n".join(f"Lisboa é a capital número {i}." for i in range(200)), "geo.txt")
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
@@ -153,11 +154,15 @@ def test_a_stream_that_the_client_leaves_stops_asking_the_decision_model():
             for line in resp.iter_lines():
                 if line.startswith(b"event: select"):
                     break
-        time.sleep(1.0)
-        asked = len(decision.calls)
-        time.sleep(1.0)
+        # wait until the calls stop: longer than one chunk of BATCH slow calls takes
+        asked, deadline = -1, time.monotonic() + 20
+        while asked != len(decision.calls) and time.monotonic() < deadline:
+            asked = len(decision.calls)
+            time.sleep(2.0)
         assert len(decision.calls) == asked
-        assert asked < 30
+        # the chunk in flight when the client left, and the one that was started before the server saw it; all 200
+        # run when the stop fails
+        assert asked <= 2 * BATCH
     finally:
         server.should_exit = True
 

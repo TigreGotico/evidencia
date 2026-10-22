@@ -342,3 +342,50 @@ def test_a_document_removed_while_its_collection_is_dropped_is_404(client):
         raise KeyError(name)
     client.app.state.engine.remove_document = gone
     assert client.delete("/v1/collections/geo/documents/geo.txt").status_code == 404
+
+
+def test_a_request_keeps_fewer_passages_with_its_own_top_k():
+    c = client_for(decision=StubDecision(keyword="século"))     # two passages name a century
+    c.post("/v1/collections/geo/documents", json={"source": "geo.txt", "text": DOC})
+    assert len(c.post("/v1/context", json={"collection": "geo", "question": Q}).json()["evidence"]) == 2
+    body = c.post("/v1/context", json={"collection": "geo", "question": Q, "top_k": 1}).json()
+    assert len(body["evidence"]) == 1
+
+
+def test_a_request_can_make_a_gate_stricter(client):
+    body = client.post("/v1/answer", json={"collection": "geo", "question": Q, "grounded_threshold": 0.95}).json()
+    assert (body["answer"], body["abstained_at"]) == (None, "grounded")
+    assert body["grounded"] == {"p": 0.9, "threshold": 0.95, "passed": False}
+    body = client.post("/v1/context", json={"collection": "geo", "question": Q, "sufficient_threshold": 0.95}).json()
+    assert body["abstained_at"] == "sufficient" and body["sufficient"]["threshold"] == 0.95
+
+
+def test_a_request_cannot_loosen_a_gate_unless_the_server_allows_it():
+    strict = client_for(decision=StubDecision(grounded=0.6))
+    strict.post("/v1/collections/geo/documents", json={"source": "geo.txt", "text": DOC})
+    r = strict.post("/v1/answer", json={"collection": "geo", "question": Q, "grounded_threshold": 0.5})
+    assert r.status_code == 422 and "allow_lower_thresholds" in r.json()["detail"]
+    loose = client_for(decision=StubDecision(grounded=0.6), allow_lower_thresholds=True)
+    loose.post("/v1/collections/geo/documents", json={"source": "geo.txt", "text": DOC})
+    body = loose.post("/v1/answer", json={"collection": "geo", "question": Q, "grounded_threshold": 0.5}).json()
+    assert body["answer"] == "Lisboa." and body["grounded"] == {"p": 0.6, "threshold": 0.5, "passed": True}
+
+
+@pytest.mark.parametrize("field, value", [("top_k", 17), ("n_candidates", 65), ("max_rounds", 5)])
+def test_a_request_stays_within_the_limits_of_the_server(client, field, value):
+    r = client.post("/v1/context", json={"collection": "geo", "question": Q, field: value})
+    assert r.status_code == 422 and field in r.json()["detail"]
+
+
+@pytest.mark.parametrize("field, value", [("select_threshold", 1.5), ("top_k", 0), ("max_rounds", True)])
+def test_a_request_setting_out_of_its_range_is_422(client, field, value):
+    assert client.post("/v1/context", json={"collection": "geo", "question": Q, field: value}).status_code == 422
+
+
+def test_the_stream_and_retrieve_use_the_request_settings(client):
+    with client.stream("POST", "/v1/answer/stream",
+                       json={"collection": "geo", "question": Q, "grounded_threshold": 0.95}) as r:
+        text = r.read().decode()
+    assert '"threshold": 0.95' in text and '"abstained_at": "grounded"' in text
+    body = client.post("/v1/retrieve", json={"collection": "geo", "question": Q, "select_threshold": 0.95}).json()
+    assert body["select_threshold"] == 0.95

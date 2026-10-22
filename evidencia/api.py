@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from evidencia import __version__
-from evidencia.config import Config
+from evidencia.config import REQUEST_SIZES, THRESHOLDS, Config
 from evidencia.decision import DecisionRejected, DecisionUnavailable
 from evidencia.index import FORMATS
 from evidencia.pipeline import Evidencia, GeneratorUnavailable
@@ -53,6 +53,12 @@ class QuestionIn(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_QUESTION)
     collection: str | None = Field(default=None, description="A local collection to search")
     sources: list[str] = Field(default=[], description="Remote sources to search, from GET /v1/sources")
+    top_k: int | None = Field(default=None, ge=1, strict=True, description="Selected passages kept as evidence")
+    n_candidates: int | None = Field(default=None, ge=1, strict=True, description="Passages retrieved in round one")
+    max_rounds: int | None = Field(default=None, ge=1, strict=True, description="Rounds of widening at most")
+    select_threshold: float | None = Field(default=None, ge=0, le=1, strict=True)
+    sufficient_threshold: float | None = Field(default=None, ge=0, le=1, strict=True)
+    grounded_threshold: float | None = Field(default=None, ge=0, le=1, strict=True)
 
     @model_validator(mode="after")
     def somewhere(self):
@@ -73,6 +79,21 @@ class GroundingIn(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_QUESTION)
     evidence: list[Annotated[str, Field(max_length=MAX_TEXT)]] = Field(min_length=1, max_length=100)
     answer: str = Field(min_length=1, max_length=MAX_TEXT)
+
+
+class EventStream(StreamingResponse):
+    """Server-sent events that set ``left`` when the response ends for any reason. A disconnect can cancel the
+    response while the event generator waits at a yield, and the generator's own cleanup then never runs."""
+
+    def __init__(self, events, left: threading.Event):
+        super().__init__(events, media_type="text/event-stream", headers={"cache-control": "no-cache"})
+        self.left = left
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self.left.set()
 
 
 class StreamClosed(Exception):
@@ -131,6 +152,14 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
             engine.targets(body.collection, body.sources)
         except KeyError:
             raise HTTPException(404, f"no collection {body.collection!r}") from None
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    def settings(body: QuestionIn) -> Config:
+        """The configuration of this request: the server's, with the thresholds and sizes the body sets."""
+        try:
+            given = {name: getattr(body, name) for name in (*REQUEST_SIZES, *THRESHOLDS)}
+            return engine.config.for_request(**given)
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
 
@@ -265,22 +294,23 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
     @app.post("/v1/retrieve", dependencies=[Depends(auth)])
     def retrieve(body: RetrieveIn):
         check_targets(body)
-        return engine.retrieve(body.question, body.collection, body.sources, body.k)
+        return engine.retrieve(body.question, body.collection, body.sources, body.k, settings(body))
 
     @app.post("/v1/context", dependencies=[Depends(auth)])
     def context(body: QuestionIn):
         check_targets(body)
-        return engine.context(body.question, body.collection, body.sources).as_dict()
+        return engine.context(body.question, body.collection, body.sources, settings=settings(body)).as_dict()
 
     @app.post("/v1/answer", dependencies=[Depends(auth)])
     def answer(body: QuestionIn):
         check_targets(body)
-        return engine.answer(body.question, body.collection, body.sources)
+        return engine.answer(body.question, body.collection, body.sources, settings=settings(body))
 
     @app.post("/v1/answer/stream", dependencies=[Depends(auth)])
     def answer_stream(body: StreamIn, request: Request):
         """Server-sent events: one event per pipeline step, then ``result`` with the body of /v1/answer or /v1/context."""
         check_targets(body)
+        cfg = settings(body)
         events: queue.Queue = queue.Queue()
         left = threading.Event()    # the client closed the stream
 
@@ -292,9 +322,10 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
         def run():
             try:
                 if body.generate:
-                    result = engine.answer(body.question, body.collection, body.sources, on_event=emit)
+                    result = engine.answer(body.question, body.collection, body.sources, on_event=emit, settings=cfg)
                 else:
-                    result = engine.context(body.question, body.collection, body.sources, on_event=emit).as_dict()
+                    result = engine.context(body.question, body.collection, body.sources, on_event=emit,
+                                            settings=cfg).as_dict()
                 events.put(("result", result))
             except StreamClosed:
                 LOG.info("answer stream closed by the client; stopped")
@@ -315,23 +346,20 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
         threading.Thread(target=run, daemon=True).start()
 
         async def stream():
-            try:
-                while True:
-                    try:
-                        item = events.get_nowait()
-                    except queue.Empty:
-                        if await request.is_disconnected():
-                            return
-                        await asyncio.sleep(0.05)
-                        continue
-                    if item is None:
+            while True:
+                try:
+                    item = events.get_nowait()
+                except queue.Empty:
+                    if await request.is_disconnected():
                         return
-                    name, data = item
-                    yield f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-            finally:
-                left.set()
+                    await asyncio.sleep(0.05)
+                    continue
+                if item is None:
+                    return
+                name, data = item
+                yield f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-        return StreamingResponse(stream(), media_type="text/event-stream", headers={"cache-control": "no-cache"})
+        return EventStream(stream(), left)
 
     @app.post("/v1/systemone", dependencies=[Depends(auth)])
     def systemone(body: dict):

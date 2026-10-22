@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from typing import Any
 
 from evidencia.version import __version__
 
 TRANSPORTS = {"requests", "curl_cffi", "flaresolverr", "browserless"}
+THRESHOLDS = ("select_threshold", "sufficient_threshold", "grounded_threshold")
+# a request may set these; the server caps each size with its max_request_* value
+REQUEST_SIZES = {"top_k": "max_request_top_k", "n_candidates": "max_request_candidates", "max_rounds": "max_request_rounds"}
 
 
 @dataclass
@@ -21,11 +24,12 @@ class DecisionConfig:
     device: str = "auto"                 # local: auto, cpu, cuda or mps
     dtype: str | None = None             # local: bf16 or fp32; default bf16 on CUDA, fp32 elsewhere
     timeout: float = 30.0
+    workers: int = 4                     # http: select questions sent at the same time
 
     def build(self):
         from evidencia.decision import HttpDecision, LocalDecision
         if self.backend == "http":
-            return HttpDecision(self.url, key=self.key, model=self.model, timeout=self.timeout)
+            return HttpDecision(self.url, key=self.key, model=self.model, timeout=self.timeout, workers=self.workers)
         if self.backend == "local":
             return LocalDecision(self.run, device=self.device, dtype=self.dtype)
         raise ValueError(f"decision.backend must be 'http' or 'local', got {self.backend!r}")
@@ -41,6 +45,10 @@ class Config:
     n_candidates: int = 8       # passages retrieved in the first round; doubles each round
     top_k: int = 4              # selected passages kept as evidence
     max_rounds: int = 2
+    max_request_top_k: int = 16        # the largest top_k a request may ask for
+    max_request_candidates: int = 64   # the largest n_candidates a request may ask for
+    max_request_rounds: int = 4        # the largest max_rounds a request may ask for
+    allow_lower_thresholds: bool = False   # let a request set a threshold below the server's; above is always allowed
     fail_open: bool = True      # decision backend down: answer ungated (True) or refuse (False)
     generator: str | None = "amalia"                   # a built-in preset, or a chat engine plugin name
     generator_config: dict[str, Any] = field(default_factory=dict)
@@ -61,11 +69,11 @@ class Config:
     def __post_init__(self):
         if isinstance(self.decision, dict):
             self.decision = _decision_config(self.decision)
-        for name in ("select_threshold", "sufficient_threshold", "grounded_threshold"):
+        for name in THRESHOLDS:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be a number in [0, 1], got {value!r}")
-        for name in ("n_candidates", "top_k", "max_rounds", "max_document_bytes"):
+        for name in (*REQUEST_SIZES, *REQUEST_SIZES.values(), "max_document_bytes"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be an integer of at least 1, got {value!r}")
@@ -88,6 +96,20 @@ class Config:
         if isinstance(self.source_timeout, bool) or not isinstance(self.source_timeout, (int, float)) \
                 or self.source_timeout <= 0:
             raise ValueError(f"source_timeout must be a number of seconds above 0, got {self.source_timeout!r}")
+
+    def for_request(self, **settings: float | int | None) -> Config:
+        """This configuration with the thresholds and sizes that one request sets. A request may make a gate
+        stricter, and looser only with ``allow_lower_thresholds``; it may not go above the ``max_request_*`` sizes."""
+        given = {name: value for name, value in settings.items() if value is not None}
+        for name, limit in REQUEST_SIZES.items():
+            if name in given and given[name] > getattr(self, limit):
+                raise ValueError(f"{name} {given[name]} is above the server limit {getattr(self, limit)} ({limit})")
+        if not self.allow_lower_thresholds:
+            for name in THRESHOLDS:
+                if name in given and given[name] < getattr(self, name):
+                    raise ValueError(f"{name} {given[name]} is below the server value {getattr(self, name)}; "
+                                     f"the server must set allow_lower_thresholds to allow it")
+        return replace(self, **given) if given else self
 
     @classmethod
     def load(cls, path: str | None = None, env: dict[str, str] | None = None) -> Config:

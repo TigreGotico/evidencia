@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from importlib import resources
 from typing import Sequence
 
-from evidencia.decision import Decision, DecisionUnavailable
+from evidencia.decision import Decision, DecisionRejected, DecisionUnavailable
 
 
 def load_locale(lang: str) -> dict:
@@ -35,7 +35,11 @@ class Gates:
         self.locale = load_locale(lang)
 
     def _noul(self, gate: str, state: dict) -> float:
-        answer = self.decision.ask(state, {gate: self.locale[gate]}).get(gate)
+        return self._probability(gate, self.decision.ask(state, {gate: self.locale[gate]}))
+
+    @staticmethod
+    def _probability(gate: str, answers: dict) -> float:
+        answer = answers.get(gate)
         if not isinstance(answer, dict):
             raise DecisionUnavailable(f"{gate}: no answer object in the reply: {answer!r}")
         p = answer.get("noul")
@@ -46,6 +50,12 @@ class Gates:
     def select(self, question: str, passage: str) -> float:
         """P(the passage helps answer the question)."""
         return self._noul("select", {"question": question, "passage": passage})
+
+    def select_many(self, question: str, passages: Sequence[str]) -> list[float | DecisionRejected]:
+        """P(select) for each passage, in one call to the backend; a refused passage gives its DecisionRejected."""
+        questions = {"select": self.locale["select"]}
+        answers = self.decision.ask_many([({"question": question, "passage": p}, questions) for p in passages])
+        return [a if isinstance(a, DecisionRejected) else self._probability("select", a) for a in answers]
 
     def sufficient(self, question: str, evidence: Sequence[str]) -> float:
         """P(the evidence is enough to answer the question)."""

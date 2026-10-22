@@ -90,8 +90,12 @@ Refer to [Public sources](sources.md).
 | `question` | The question, in European Portuguese. At most 2000 characters |
 | `collection` | A collection to search. Optional |
 | `sources` | A list of enabled source names to search. Optional, default `[]` |
+| `top_k`, `n_candidates`, `max_rounds` | The sizes of this request. Optional, the server values by default |
+| `select_threshold`, `sufficient_threshold`, `grounded_threshold` | The gate thresholds of this request, from 0 to 1. Optional, the server values by default |
 
 Give a collection, at least one source, or both.
+
+A request can make a gate stricter than the server: `"grounded_threshold": 0.95` answers only when the grounding probability is 0.95 or more. A threshold below the server value returns 422, unless the server sets `allow_lower_thresholds`. A size above the server limit, such as `top_k` above `max_request_top_k`, also returns 422. The response gives the threshold of each gate that ran, so the client can see which values applied.
 
 Each passage in a response has these fields:
 
@@ -293,7 +297,7 @@ An error body is `{"detail": "<reason>"}`. Errors from the decision backend, the
 | 404 | The collection or the document does not exist |
 | 411 | The request body has no `Content-Length` |
 | 413 | The document is larger than `max_document_bytes`, or the request body is larger than 6 times `max_document_bytes` plus 64 KiB |
-| 422 | The request body is not valid; it names no collection and no source; it names a source that is not enabled, or a collection with the name of a requested source; a document has no text; a file has an unknown format, is not UTF-8 or is not a readable PDF; a URL redirects or its text does not decode; or the decision model refused the request |
+| 422 | The request body is not valid; a threshold is below the server value and `allow_lower_thresholds` is off; a size is above its `max_request_*` limit; it names no collection and no source; it names a source that is not enabled, or a collection with the name of a requested source; a document has no text; a file has an unknown format, is not UTF-8 or is not a readable PDF; a URL redirects or its text does not decode; or the decision model refused the request |
 | 500 | An unexpected error in the answer stream. The `error` event carries it |
 | 502 | The chat model is not configured or failed, or a URL could not be fetched. The reasons for the chat model are below |
 | 503 | The decision backend is unavailable and `fail_open` is false, or the call does not apply `fail_open` |
