@@ -28,8 +28,9 @@ def gov_route(url, body):
 def test_gov_pt_also_searches_without_the_first_words_of_the_question():
     http = FakeHttp(gov_route)
     hits = GovPt(http, STOPWORDS).search("Como peço o subsídio de desemprego?", 2)
-    assert [body["body"]["params"]["value"] for _, body in http.calls] == [
-        "peço subsídio desemprego", "peço subsídio", "subsídio desemprego", "peço", "subsídio", "desemprego"]
+    # the searches run in parallel, so they reach the portal in any order
+    assert sorted(body["body"]["params"]["value"] for _, body in http.calls) == sorted(
+        ["peço subsídio desemprego", "peço subsídio", "subsídio desemprego", "peço", "subsídio", "desemprego"])
     assert hits[0].text == ("Pedir o subsídio de desemprego\n"
                             "O subsídio de desemprego é uma prestação em dinheiro. Pedir na Segurança Social.")
     assert (hits[0].url, hits[0].origin) == ("https://www.gov.pt/servicos/pedir-o-subsidio", "gov.pt")
@@ -389,7 +390,7 @@ def test_gov_pt_runs_at_most_the_configured_number_of_searches():
     source = GovPt(http, STOPWORDS)
     source.searches = 2
     source.fetch("Como peço o subsídio de desemprego?")
-    assert [body["body"]["params"]["value"] for _, body in http.calls] == ["peço subsídio desemprego", "peço subsídio"]
+    assert sorted(body["body"]["params"]["value"] for _, body in http.calls) == ["peço subsídio", "peço subsídio desemprego"]
 
 
 def test_dns_pt_reads_a_no_match_in_any_case_and_registers_gov_pt_names_at_gov_pt():

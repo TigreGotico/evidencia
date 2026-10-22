@@ -97,7 +97,7 @@ def test_the_page_named_in_the_question_comes_before_the_keyword_hits():
     http = FakeHttp(route)
     hits = Wikipedia(http, STOPWORDS).search("Quantos habitantes tem Lisboa?", 4)
     assert [c["titles"] for _, c in http.calls if "titles" in c] == ["Lisboa"]
-    assert [c["pageids"] for _, c in http.calls if "pageids" in c] == [1, 2]
+    assert sorted(c["pageids"] for _, c in http.calls if "pageids" in c) == [1, 2]     # fetched in parallel
     assert hits[0].source == "Lisboa"
 
 
