@@ -1024,3 +1024,73 @@ def test_carris_reads_a_line_before_a_range_of_years():
     source = CarrisMetropolitana(FakeHttp(cm_route), STOPWORDS)
     source.now = lambda: 1792600000
     assert [d.title for d in source.fetch("Há alterações na linha 3210-2027?")] == ["Linha 3210 da Carris Metropolitana"]
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr("evidencia.sources.time.monotonic", lambda: now[0])
+    return now
+
+
+def lines_read(http):
+    return sum(url.endswith("/v2/lines") for url, _ in http.calls)
+
+
+def test_carris_reads_its_line_list_again_after_a_day(clock):
+    lines = [CM_LINES[0]]
+    http = FakeHttp(lambda url, params: lines if url.endswith("/v2/lines") else cm_route(url, params))
+    source = CarrisMetropolitana(http, STOPWORDS)
+    source.now = lambda: 1792600000
+    assert source.fetch("linha 3210?") and lines_read(http) == 1
+    lines = CM_LINES
+    clock[0] += source.lists_ttl - 1
+    assert source.fetch("linha 4600?") == [] and lines_read(http) == 1
+    clock[0] += 2
+    assert source.fetch("linha 4600?")[0].title == "Linha 4600 da Carris Metropolitana"
+    assert lines_read(http) == 2
+
+
+def test_a_failed_refresh_keeps_the_old_list_and_tries_again_after_a_pause(clock):
+    from evidencia.sources import BREAKER_PAUSE
+    down = [False]
+    def route(url, params):
+        if down[0] and url.endswith("/v2/lines"):
+            return requests.ConnectionError("down")
+        return cm_route(url, params)
+    http = FakeHttp(route)
+    source = CarrisMetropolitana(http, STOPWORDS)
+    source.now = lambda: 1792600000
+    source.fetch("linha 3210?")
+    down[0] = True
+    clock[0] += source.lists_ttl
+    assert source.fetch("linha 3210?")[0].title == "Linha 3210 da Carris Metropolitana"
+    assert lines_read(http) == 2
+    clock[0] += BREAKER_PAUSE - 1
+    source.fetch("linha 3210?")
+    assert lines_read(http) == 2
+    clock[0] += 2
+    down[0] = False
+    source.fetch("linha 3210?")
+    assert lines_read(http) == 3
+    clock[0] += source.lists_ttl - 1
+    source.fetch("linha 3210?")
+    assert lines_read(http) == 3
+
+
+def test_a_list_that_was_never_read_fails_its_question():
+    http = FakeHttp(lambda url, params: requests.ConnectionError("down") if url.endswith("/v2/lines")
+                    else cm_route(url, params))
+    with pytest.raises(requests.ConnectionError):
+        CarrisMetropolitana(http, STOPWORDS).fetch("linha 3210?")
+
+
+def test_every_question_shares_one_read_of_a_feed_for_five_minutes(clock):
+    http = FakeHttp(lambda url, params: RSS)
+    source = RtpNoticias(http, STOPWORDS)
+    source.search("Quem ganhou o Prémio Sakharov?", 2)
+    source.search("Há greve nos comboios?", 2)
+    assert len(http.calls) == 1
+    clock[0] += 301
+    assert source.search("Quem ganhou o Prémio Sakharov?", 2)
+    assert len(http.calls) == 2
