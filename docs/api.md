@@ -61,9 +61,23 @@ When `api_key` is set, every `/v1` call must send the header `Authorization: Bea
 {"sources": [
   {"name": "pt.wikipedia", "title": "Wikipédia em português", "homepage": "https://pt.wikipedia.org",
    "licence": "CC BY-SA 4.0", "commercial": true,
-   "description": "Encyclopedia articles. Articles are in European or Brazilian Portuguese.", "enabled": true}
+   "description": "Encyclopedia articles. Articles are in European or Brazilian Portuguese.", "enabled": true,
+   "health": {"fetches": 12, "failures": 1, "consecutive_failures": 0,
+              "last_error": "pt.wikipedia: ConnectionError", "last_error_at": "2026-10-22T09:14:03Z",
+              "last_latency_ms": 412, "paused_for_s": 0}}
 ]}
 ```
+
+`health` is `null` for a source that is not enabled. Its fields count from the start of the service:
+
+| Field | Meaning |
+| --- | --- |
+| `fetches` | Searches sent to the source. An answer from the cache is not a search |
+| `failures` | Searches that failed |
+| `consecutive_failures` | Failures of the service since the last search that succeeded. A reply that evidencia cannot read does not count |
+| `last_error`, `last_error_at` | The type of the last failure, with the HTTP status when there is one, and its UTC time, or `null`. The service log has the full message |
+| `last_latency_ms` | The time of the last search, in milliseconds |
+| `paused_for_s` | Seconds until the source sends requests again, after 3 failures in a row. 0 when it is not paused |
 
 Refer to [Public sources](sources.md).
 

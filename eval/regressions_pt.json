@@ -1,0 +1,34 @@
+{
+ "about": "Answers from live runs that the gates passed and should have stopped. Each row holds the evidence and the draft exactly as the run returned them. The labels were set by Claude Opus 5.5 from the evidence text and are not reviewed by a person. These rows are not part of gates_pt.json and do not change its tables.",
+ "rows": [
+  {
+   "id": "r1",
+   "gate": "sufficient",
+   "question": "Como peço o subsídio de desemprego?",
+   "evidence": [
+    "Pedido do Subsídio Social de Desemprego Subsequente disponível online, 2023-04-21\nO subsídio social de desemprego subsequente pode ser pedido até 30 dias antes de terminar o subsídio de desemprego. Basta aceder à Segurança Social Direta e, no menu “Emprego”, selecionar “Desemprego” e de seguida “Pedir Subsídio Social Subsequente”.",
+    "Pedido do Subsídio Social de Desemprego Subsequente disponível online, 2023-04-21\nPara saber como pedir o subsídio social de desemprego subsequente online, consulte o vídeo da Segurança Social.",
+    "Pedir o subsídio de desemprego\nO subsídio de desemprego é uma prestação em dinheiro, atribuída às pessoas desempregadas para compensar a falta de remuneração motivada pela perda involuntária de emprego.",
+    "Pedido do Subsídio Social de Desemprego Subsequente disponível online, 2023-04-21\nJá pode pedir o subsídio social de desemprego subsequente na Segurança Social Direta. Esta prestação é atribuída a quem já recebeu o subsídio de desemprego a que tinha direito e continue em situação de desemprego."
+   ],
+   "label": 0,
+   "capture": "live-gov/answers-3.jsonl",
+   "why": "The evidence says how to ask for the subsequent social benefit, not for the unemployment benefit itself."
+  },
+  {
+   "id": "r2",
+   "gate": "grounded",
+   "question": "Quantos habitantes tem Ponta Delgada?",
+   "evidence": [
+    "Nos Censos de 2011, o município de Ponta Delgada tinha 69 034 habitantes.",
+    "Nos Censos de 2021, o município de Ponta Delgada tinha 67 229 habitantes: 32 385 homens e 34 844 mulheres.",
+    "Nos Censos de 2021, 9 630 residentes de Ponta Delgada tinham menos de 15 anos e 10 102 tinham 65 anos ou mais.",
+    "Ponta Delgada é um município da Ilha de São Miguel."
+   ],
+   "answer": "Ponta Delgada tinha 69 034 habitantes em 2011, de acordo com os Censos [1]. Embora os dados de 2021 indiquem uma diminuição para 67 229 habitantes, o valor mais recente disponível na evidência fornecida é o de 2011. Portanto, com base na evidência fornecida, Ponta Delgada tinha 69 034 habitantes.",
+   "label": 0,
+   "capture": "live-gov/answers-2.jsonl",
+   "why": "The answer says 2011 is the latest count; the evidence gives the 2021 count."
+  }
+ ]
+}

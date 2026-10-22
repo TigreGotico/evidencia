@@ -23,7 +23,7 @@ from evidencia.config import Config
 from evidencia.decision import DecisionRejected, DecisionUnavailable
 from evidencia.index import FORMATS
 from evidencia.pipeline import Evidencia, GeneratorUnavailable
-from evidencia.sources import CATALOG
+from evidencia.sources import CATALOG, RemoteSource
 
 LOG = logging.getLogger("evidencia")
 Format = Literal["text", "markdown", "html", "pdf"]
@@ -185,9 +185,11 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
 
     @app.get("/v1/sources", dependencies=[Depends(auth)])
     def sources():
-        """Every remote source evidencia knows, with its licence and whether this service queries it."""
-        return {"sources": [{**cls.describe(), "enabled": name in engine.sources}
-                            for name, cls in CATALOG.items()]}
+        """Every remote source evidencia knows, with its licence, whether this service queries it, and the health of
+        each source it queries."""
+        return {"sources": [{**cls.describe(), "enabled": name in engine.sources,
+                             "health": source.health() if isinstance(source := engine.sources.get(name), RemoteSource)
+                             else None} for name, cls in CATALOG.items()]}
 
     @app.get("/v1/collections", dependencies=[Depends(auth)])
     def collections():
