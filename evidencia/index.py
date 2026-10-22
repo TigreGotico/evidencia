@@ -128,18 +128,28 @@ def chunk(content: str | bytes, fmt: str) -> list[str]:
 
 @dataclass
 class Collection:
-    """A named set of documents. With ``embed``, search fuses BM25 and embedding similarity by rank."""
+    """A named set of documents. With ``embed``, search fuses BM25 and embedding similarity by rank.
+
+    ``vectors`` holds one embedding row per passage, in order; rows given at construction are used when they
+    match the passages, so a restart does not embed again. An add embeds only its own passages, and builds the
+    new index before it takes the lock that searches hold.
+    """
     name: str
     lang: str = "pt-PT"
     passages: list[Passage] = field(default_factory=list)
     embed: Embed | None = None
+    vectors: "numpy.ndarray | None" = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()           # held by searches and by the swap to a new index
+        self._write_lock = threading.Lock()     # one add or remove at a time
         self._bm25: BM25CorpusSolver | None = None
-        self._vectors = None
+        if self.embed is None:
+            self.vectors = None
+        elif self.vectors is None or len(self.vectors) != len(self.passages):
+            self.vectors = self.embed([p.text for p in self.passages]) if self.passages else None
         if self.passages:
-            self._reindex()
+            self._bm25 = self._bm25_for(self.passages)
 
     def add(self, content: str | bytes, source: str, fmt: str = "text", url: str = "") -> list[Passage]:
         """Chunk a document, add its passages and rebuild the index. Re-adding a source replaces it."""
@@ -148,26 +158,35 @@ class Collection:
                for i, c in enumerate(chunk(content, fmt))]
         if not new:
             raise ValueError(f"{source}: no text found")
-        with self._lock:
-            self.passages = [p for p in self.passages if p.source != source] + new
-            self._reindex()
+        with self._write_lock:
+            keep = [i for i, p in enumerate(self.passages) if p.source != source]
+            added = self.embed([p.text for p in new]) if self.embed else None
+            self._swap([self.passages[i] for i in keep] + new, keep, added)
         return new
 
     def remove(self, source: str) -> int:
-        with self._lock:
-            before = len(self.passages)
-            self.passages = [p for p in self.passages if p.source != source]
-            self._reindex()
-            return before - len(self.passages)
+        with self._write_lock:
+            keep = [i for i, p in enumerate(self.passages) if p.source != source]
+            removed = len(self.passages) - len(keep)
+            if removed:
+                self._swap([self.passages[i] for i in keep], keep, None)
+            return removed
 
-    def _reindex(self):
-        if not self.passages:
-            self._bm25 = self._vectors = None
-            return
+    def _swap(self, passages: list[Passage], keep: list[int], added) -> None:
+        """Build the index of ``passages``: the kept rows of the old vectors, then ``added``; then swap it in."""
+        vectors = None
+        if self.embed is not None and passages:
+            import numpy as np
+            parts = [self.vectors[keep]] if keep else []
+            vectors = np.concatenate(parts + ([added] if added is not None else []))
+        bm25 = self._bm25_for(passages) if passages else None
+        with self._lock:
+            self.passages, self.vectors, self._bm25 = passages, vectors, bm25
+
+    def _bm25_for(self, passages: list[Passage]) -> BM25CorpusSolver:
         bm25 = BM25CorpusSolver({"lang": self.lang, "method": None, "idf_method": None})
-        bm25.load_corpus([p.text for p in self.passages])
-        self._bm25 = bm25
-        self._vectors = self.embed([p.text for p in self.passages]) if self.embed else None
+        bm25.load_corpus([p.text for p in passages])
+        return bm25
 
     def search(self, query: str, k: int) -> list[Passage]:
         """The top ``k`` passages, best first.
@@ -175,6 +194,7 @@ class Collection:
         BM25 alone returns only passages that share a term with the query. Hybrid search also returns passages
         that are only similar in meaning, and its score is the fused rank score, not a BM25 score.
         """
+        query_vector = self.embed([query])[0] if self.embed is not None and k > 0 else None
         with self._lock:
             if self._bm25 is None or k <= 0:
                 return []
@@ -186,17 +206,23 @@ class Collection:
             ranked = [(by_text[text].pop(0), float(score))
                       for text, score in self._bm25.query(query, lang=self.lang, k=n if self.embed else min(k, n))]
             ranked = [(i, score) for i, score in ranked if score > 0]
-            if self._vectors is not None:
+            if self.vectors is not None:
                 fused: dict[int, float] = defaultdict(float)
                 for rank, (i, _) in enumerate(ranked):
                     fused[i] += 1 / (RRF_K + rank + 1)
-                similarity = self._vectors @ self.embed([query])[0]
+                similarity = self.vectors @ query_vector
                 for rank, i in enumerate(similarity.argsort()[::-1]):
                     fused[int(i)] += 1 / (RRF_K + rank + 1)
                 ranked = sorted(fused.items(), key=lambda item: (-item[1], item[0]))
             hits = [(self.passages[i], score) for i, score in ranked[:k]]
         return [Passage(p.id, p.text, p.source, score, p.url, p.origin) for p, score in hits]
 
-    def as_dict(self) -> dict:
-        return {"name": self.name, "lang": self.lang, "passages": [asdict(p) for p in self.passages]}
+    def state(self) -> tuple[list[Passage], "numpy.ndarray | None"]:
+        """The passages and their vectors, read together."""
+        with self._lock:
+            return self.passages, self.vectors
+
+    def as_dict(self, passages: list[Passage] | None = None) -> dict:
+        passages = self.passages if passages is None else passages
+        return {"name": self.name, "lang": self.lang, "passages": [asdict(p) for p in passages]}
 
