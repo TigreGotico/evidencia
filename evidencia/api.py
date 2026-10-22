@@ -8,7 +8,6 @@ import logging
 import queue
 import threading
 import time
-import uuid
 from importlib import resources
 from pathlib import PurePath
 from typing import Annotated, Literal
@@ -78,30 +77,6 @@ class StreamIn(QuestionIn):
 
 class RetrieveIn(QuestionIn):
     k: int = Field(default=8, ge=1, le=100)
-
-
-class ContentPartIn(BaseModel):
-    type: str
-    text: str = ""
-
-
-class ChatMessageIn(BaseModel):
-    role: str
-    content: str | list[ContentPartIn] | None = None
-
-    def text(self) -> str:
-        if isinstance(self.content, list):
-            return " ".join(part.text for part in self.content if part.type == "text")
-        return self.content or ""
-
-
-class ChatCompletionIn(SettingsIn):
-    """An OpenAI chat completion request. ``model`` is ``evidencia`` or ``evidencia/<collection>``; the other
-    OpenAI fields, such as ``temperature``, are ignored."""
-    model: str
-    messages: list[ChatMessageIn] = Field(min_length=1)
-    stream: bool = False
-    sources: list[str] = Field(default=[], description="Remote sources to search, from GET /v1/sources")
 
 
 class VectorSearchIn(SettingsIn):
@@ -408,54 +383,6 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
             return engine.context(body.question, body.collection, body.sources, on_event=emit, settings=cfg).as_dict()
 
         return streamed(request, work, lambda name, data: f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n")
-
-    @app.post("/v1/chat/completions", dependencies=[Depends(auth)])
-    def chat_completions(body: ChatCompletionIn, request: Request):
-        """The gated answer as an OpenAI chat completion. The ``evidencia`` field holds the gates and the evidence.
-        An abstention is a normal reply with the locale's abstain text. A stream sends the answer as one chunk,
-        because the grounded gate checks the whole answer before any of it is sent."""
-        family, _, collection = body.model.partition("/")
-        if family != "evidencia":
-            raise HTTPException(404, f"no model {body.model!r}; use evidencia or evidencia/<collection>")
-        users = [m for m in body.messages if m.role == "user"]
-        if not users:
-            raise HTTPException(422, "the messages hold no user message")
-        q = question_from(body, question=users[-1].text(), collection=collection or None, sources=body.sources)
-        check_targets(q)
-        cfg = settings(body)
-        reply_id, created = f"chatcmpl-{uuid.uuid4().hex}", int(time.time())
-
-        def side(result: dict) -> dict:
-            return {"gates": result["gates"], "abstained": result["answer"] is None,
-                    "abstained_at": result["abstained_at"], "evidence": result["evidence"], "cited": result["cited"],
-                    "grounded": result["grounded"]}
-
-        def content(result: dict) -> str:
-            return result["answer"] if result["answer"] is not None else result["message"]
-
-        if not body.stream:
-            result = engine.answer(q.question, q.collection, q.sources, settings=cfg)
-            return {"id": reply_id, "object": "chat.completion", "created": created, "model": body.model,
-                    "choices": [{"index": 0, "message": {"role": "assistant", "content": content(result)},
-                                 "finish_reason": "stop"}],
-                    "evidencia": side(result)}
-
-        def chunk(delta: dict, finish: str | None, **extra) -> str:
-            data = {"id": reply_id, "object": "chat.completion.chunk", "created": created, "model": body.model,
-                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}], **extra}
-            return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-        def frame(name: str, data: dict) -> str | None:
-            if name == "error":
-                error = {"message": data["detail"], "type": "server_error", "code": data["status"]}
-                return f"data: {json.dumps({'error': error}, ensure_ascii=False)}\n\n"
-            if name != "result":
-                return None
-            return (chunk({"role": "assistant", "content": content(data)}, None)
-                    + chunk({}, "stop", evidencia=side(data)) + "data: [DONE]\n\n")
-
-        return streamed(request, lambda emit: engine.answer(q.question, q.collection, q.sources, on_event=emit,
-                                                             settings=cfg), frame)
 
     @app.post("/v1/vector_stores/{collection}/search", dependencies=[Depends(auth)])
     def vector_store_search(collection: str, body: VectorSearchIn):
