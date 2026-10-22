@@ -1140,3 +1140,44 @@ def test_questions_at_the_same_time_share_one_read_of_the_feed():
     for t in threads:
         t.join()
     assert len(http.calls) == 1
+
+
+def test_failed_refreshes_of_kept_lists_do_not_pause_a_source_that_still_answers(clock):
+    down = [False]
+    lists = ("/v2/lines", "/v2/locations/municipalities", "/v2/locations/localities")
+    http = FakeHttp(lambda url, params: requests.ConnectionError("down") if down[0] and url.endswith(lists)
+                    else cm_route(url, params))
+    source = CarrisMetropolitana(http, STOPWORDS)
+    source.now = lambda: 1792600000
+    source.search("Que autocarros passam em Alhos Vedros?", 2)
+    down[0] = True
+    clock[0] += source.lists_ttl
+    assert source.search("Que autocarros passam na Moita?", 2)
+    health = source.health()
+    assert (health["failures"], health["consecutive_failures"], health["paused_for_s"]) == (3, 0, 0)
+    assert health["fetches"] == 2
+
+
+def test_questions_waiting_on_a_failed_feed_read_fail_with_it():
+    import threading
+    import time
+    from evidencia.sources import SourceUnavailable
+    def slow_down(url, params):
+        time.sleep(0.2)
+        return requests.ConnectionError("down")
+    http = FakeHttp(slow_down)
+    source = RtpNoticias(http, STOPWORDS)
+    errors = []
+    def ask(i):
+        try:
+            source.search(f"Notícia número {i}?", 2)
+        except SourceUnavailable as e:
+            errors.append(e)
+    threads = [threading.Thread(target=ask, args=(i,)) for i in range(6)]
+    start = time.monotonic()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(http.calls) == 1 and len(errors) == 6
+    assert time.monotonic() - start < 0.6

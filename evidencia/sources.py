@@ -101,17 +101,23 @@ class refreshed:
         hit = source.__dict__.get(self.key)
         if hit and time.monotonic() < hit[1]:
             return hit[2]
+        failures = source.__dict__.get(self.key + "_failures", (0, None))[0]
         with source.__dict__.setdefault(self.key + "_lock", threading.Lock()):
             hit = source.__dict__.get(self.key)     # (read at, fresh until, value)
             now = time.monotonic()
             if hit and now < hit[1]:
                 return hit[2]
+            # a fetch that failed while this reader waited fails this reader too, instead of a fetch per reader
+            now_failures, error = source.__dict__.get(self.key + "_failures", (0, None))
+            if now_failures > failures:
+                raise error
             try:
                 value = self.fetch(source)
             except Exception as e:
                 if not hit or not source.keep_stale:
+                    source.__dict__[self.key + "_failures"] = (now_failures + 1, e)
                     raise
-                source._failed(e, time.monotonic() - now)
+                source._noted(e)
                 LOG.warning("%s: cannot refresh %s (%s); keeping the list read %d s ago",
                             source.name, self.name, e, now - hit[0])
                 source.__dict__[self.key] = (hit[0], now + BREAKER_PAUSE, hit[2])
@@ -307,15 +313,22 @@ class RemoteSource:
                 or isinstance(error, OSError) and not isinstance(error, requests.RequestException)
         with self._lock:
             self._fetches += 1
-            self._failures += 1
             if of_service:
                 self._in_a_row += 1
                 if self._in_a_row >= BREAKER_FAILURES:
                     self._paused_until = time.monotonic() + BREAKER_PAUSE
+            self._last_latency_ms = round(seconds * 1000)
+        self._noted(error)
+
+    def _noted(self, error: Exception):
+        """Count a failure in the health of the source, without counting it towards a pause."""
+        status = error.response.status_code if isinstance(error, requests.HTTPError) and error.response is not None \
+            else None
+        with self._lock:
+            self._failures += 1
             # the type and status only: the message of an HTTP error holds the URL, and the URL holds the question
             self._last_error = f"{self.name}: {type(error).__name__}" + (f" {status}" if status else "")
             self._last_error_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-            self._last_latency_ms = round(seconds * 1000)
 
     def get(self, url: str, **params) -> bytes:
         """The body of a GET, cut at ``max_bytes``. The whole request must end within the source timeout."""
