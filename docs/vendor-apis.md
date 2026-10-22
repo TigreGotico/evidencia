@@ -87,7 +87,7 @@ curl http://127.0.0.1:8337/ollama/api/chat -H 'Content-Type: application/json' -
   "messages": [{"role": "user", "content": "Qual é a capital de Portugal?"}]}'
 ```
 
-The reply is the gated answer, or the abstain text when evidencia abstains and `abstain_message` is true. A stream sends the same text. When evidencia abstains and no other handler answers, a request without a stream gets HTTP 422. An OpenAI stream gets HTTP 200 and then an `error` event of type `persona_no_answer`. The openai SDK raises `APIError` for that event.
+The reply is the gated answer, or the abstain text when evidencia abstains and `abstain_message` is true. A stream sends the same text. When evidencia abstains and no other handler answers, a request without a stream gets HTTP 422. A stream gets HTTP 200 and then an error in the shape of its API. On the OpenAI API, that is a `data:` line with an `error` object of type `persona_no_answer`, and the openai SDK raises `APIError`.
 
 To fall back to another engine when evidencia abstains, leave `abstain_message` false and list the other engine after the evidencia handler. Then evidencia answers what its evidence supports, and the other engine answers the rest. Such an answer is not checked by any gate.
 
