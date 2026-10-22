@@ -1024,3 +1024,160 @@ def test_carris_reads_a_line_before_a_range_of_years():
     source = CarrisMetropolitana(FakeHttp(cm_route), STOPWORDS)
     source.now = lambda: 1792600000
     assert [d.title for d in source.fetch("Há alterações na linha 3210-2027?")] == ["Linha 3210 da Carris Metropolitana"]
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr("evidencia.sources.time.monotonic", lambda: now[0])
+    return now
+
+
+def lines_read(http):
+    return sum(url.endswith("/v2/lines") for url, _ in http.calls)
+
+
+def test_carris_reads_its_line_list_again_after_a_day(clock):
+    lines = [CM_LINES[0]]
+    http = FakeHttp(lambda url, params: lines if url.endswith("/v2/lines") else cm_route(url, params))
+    source = CarrisMetropolitana(http, STOPWORDS)
+    source.now = lambda: 1792600000
+    assert source.fetch("linha 3210?") and lines_read(http) == 1
+    lines = CM_LINES
+    clock[0] += source.lists_ttl - 1
+    assert source.fetch("linha 4600?") == [] and lines_read(http) == 1
+    clock[0] += 2
+    assert source.fetch("linha 4600?")[0].title == "Linha 4600 da Carris Metropolitana"
+    assert lines_read(http) == 2
+
+
+def test_a_failed_refresh_keeps_the_old_list_and_tries_again_after_a_pause(clock):
+    from evidencia.sources import BREAKER_PAUSE
+    down = [False]
+    def route(url, params):
+        if down[0] and url.endswith("/v2/lines"):
+            return requests.ConnectionError("down")
+        return cm_route(url, params)
+    http = FakeHttp(route)
+    source = CarrisMetropolitana(http, STOPWORDS)
+    source.now = lambda: 1792600000
+    source.fetch("linha 3210?")
+    down[0] = True
+    clock[0] += source.lists_ttl
+    assert source.fetch("linha 3210?")[0].title == "Linha 3210 da Carris Metropolitana"
+    assert lines_read(http) == 2
+    clock[0] += BREAKER_PAUSE - 1
+    source.fetch("linha 3210?")
+    assert lines_read(http) == 2
+    clock[0] += 2
+    down[0] = False
+    source.fetch("linha 3210?")
+    assert lines_read(http) == 3
+    clock[0] += source.lists_ttl - 1
+    source.fetch("linha 3210?")
+    assert lines_read(http) == 3
+
+
+def test_a_list_that_was_never_read_fails_its_question():
+    http = FakeHttp(lambda url, params: requests.ConnectionError("down") if url.endswith("/v2/lines")
+                    else cm_route(url, params))
+    with pytest.raises(requests.ConnectionError):
+        CarrisMetropolitana(http, STOPWORDS).fetch("linha 3210?")
+
+
+def test_every_question_shares_one_read_of_a_feed_for_five_minutes(clock):
+    http = FakeHttp(lambda url, params: RSS)
+    source = RtpNoticias(http, STOPWORDS)
+    source.search("Quem ganhou o Prémio Sakharov?", 2)
+    source.search("Há greve nos comboios?", 2)
+    assert len(http.calls) == 1
+    clock[0] += 301
+    assert source.search("Quem ganhou o Prémio Sakharov?", 2)
+    assert len(http.calls) == 2
+
+
+def test_a_feed_that_cannot_be_read_fails_the_source_and_shows_in_its_health(clock):
+    from evidencia.sources import SourceUnavailable
+    down = [False]
+    source = RtpNoticias(FakeHttp(lambda url, params: requests.ConnectionError("down") if down[0] else RSS), STOPWORDS)
+    assert source.search("Quem ganhou o Prémio Sakharov?", 2)
+    down[0] = True
+    clock[0] += 301
+    with pytest.raises(SourceUnavailable):
+        source.search("Quem ganhou o Prémio Sakharov?", 2)
+    health = source.health()
+    assert health["failures"] == 1 and "ConnectionError" in health["last_error"]
+
+
+def test_a_kept_list_shows_its_failed_refresh_in_the_health_and_logs_its_real_age(clock, caplog):
+    from evidencia.sources import BREAKER_PAUSE
+    down = [False]
+    source = CarrisMetropolitana(FakeHttp(lambda url, params: requests.ConnectionError("down")
+                                          if down[0] and url.endswith("/v2/lines") else cm_route(url, params)), STOPWORDS)
+    source.now = lambda: 1792600000
+    source.search("linha 3210?", 2)
+    down[0] = True
+    clock[0] += source.lists_ttl
+    source.search("linha 4600?", 2)
+    clock[0] += BREAKER_PAUSE
+    source.search("linha 3201?", 2)
+    assert source.health()["failures"] == 2 and "ConnectionError" in source.health()["last_error"]
+    ages = [r.getMessage().rsplit("read ", 1)[1] for r in caplog.records if "cannot refresh lines" in r.getMessage()]
+    assert ages == [f"{int(source.lists_ttl)} s ago", f"{int(source.lists_ttl + BREAKER_PAUSE)} s ago"]
+
+
+def test_questions_at_the_same_time_share_one_read_of_the_feed():
+    import threading
+    import time
+    def slow(url, params):
+        time.sleep(0.2)
+        return RSS
+    http = FakeHttp(slow)
+    source = RtpNoticias(http, STOPWORDS)
+    threads = [threading.Thread(target=source.search, args=(f"Notícia número {i}?", 2)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(http.calls) == 1
+
+
+def test_failed_refreshes_of_kept_lists_do_not_pause_a_source_that_still_answers(clock):
+    down = [False]
+    lists = ("/v2/lines", "/v2/locations/municipalities", "/v2/locations/localities")
+    http = FakeHttp(lambda url, params: requests.ConnectionError("down") if down[0] and url.endswith(lists)
+                    else cm_route(url, params))
+    source = CarrisMetropolitana(http, STOPWORDS)
+    source.now = lambda: 1792600000
+    source.search("Que autocarros passam em Alhos Vedros?", 2)
+    down[0] = True
+    clock[0] += source.lists_ttl
+    assert source.search("Que autocarros passam na Moita?", 2)
+    health = source.health()
+    assert (health["failures"], health["consecutive_failures"], health["paused_for_s"]) == (3, 0, 0)
+    assert health["fetches"] == 2
+
+
+def test_questions_waiting_on_a_failed_feed_read_fail_with_it():
+    import threading
+    import time
+    from evidencia.sources import SourceUnavailable
+    def slow_down(url, params):
+        time.sleep(0.2)
+        return requests.ConnectionError("down")
+    http = FakeHttp(slow_down)
+    source = RtpNoticias(http, STOPWORDS)
+    errors = []
+    def ask(i):
+        try:
+            source.search(f"Notícia número {i}?", 2)
+        except SourceUnavailable as e:
+            errors.append(e)
+    threads = [threading.Thread(target=ask, args=(i,)) for i in range(6)]
+    start = time.monotonic()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(http.calls) == 1 and len(errors) == 6
+    assert time.monotonic() - start < 0.6

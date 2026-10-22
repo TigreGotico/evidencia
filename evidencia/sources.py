@@ -15,10 +15,10 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
-from functools import cache, cached_property
+from functools import cache
 from html import unescape
 from importlib import resources
-from typing import Protocol
+from typing import Callable, Protocol
 from urllib.parse import quote, urlencode, urljoin
 from zoneinfo import ZoneInfo
 
@@ -32,6 +32,7 @@ MAX_REMOTE_BYTES = 2_000_000    # the most text read from one remote document
 CACHE_SIZE = 128                # questions whose fetched documents are kept
 NAME = re.compile(r"[A-ZÀ-Ý][\w-]*(?:\s+(?:(?:d[aeo]s?)\s+)?[A-ZÀ-Ý][\w-]*)*")  # a run of capitalised words, joined by de, da, do and their plurals
 CACHE_TTL = 600.0               # seconds a fetched document set is reused
+LISTS_TTL = 86_400.0            # seconds a reference list of a source, such as its bus lines, is reused
 BREAKER_FAILURES = 3            # failed fetches in a row that pause a source
 BREAKER_PAUSE = 60.0            # seconds a paused source answers SourceUnavailable without a request
 MAX_QUERY = 300                 # the longest keyword search: CirrusSearch refuses a longer one
@@ -83,6 +84,48 @@ class Document:
 # the text before the first word of a sentence: "", "Olá! ", "1. ", "Bom dia, " or "«"
 SENTENCE_START = re.compile(r"(?:^|[.!?:;,\n-])[\s¿¡\"'«(]*$")
 
+class refreshed:
+    """A property that is fetched again after ``lists_ttl`` seconds of its source. Readers at the same time share
+    one fetch. When a fetch fails, the failure counts in the health of the source. A source with ``keep_stale``
+    then keeps the older value and tries again after BREAKER_PAUSE seconds; another source fails the question."""
+
+    def __init__(self, fetch: Callable):
+        self.fetch = fetch
+        self.name = fetch.__name__
+        self.key = f"_refreshed_{fetch.__name__}"     # not the property name, which would hide the property
+        self.__doc__ = fetch.__doc__
+
+    def __get__(self, source: RemoteSource | None, owner=None):
+        if source is None:
+            return self
+        hit = source.__dict__.get(self.key)
+        if hit and time.monotonic() < hit[1]:
+            return hit[2]
+        failures = source.__dict__.get(self.key + "_failures", (0, None))[0]
+        with source.__dict__.setdefault(self.key + "_lock", threading.Lock()):
+            hit = source.__dict__.get(self.key)     # (read at, fresh until, value)
+            now = time.monotonic()
+            if hit and now < hit[1]:
+                return hit[2]
+            # a fetch that failed while this reader waited fails this reader too, instead of a fetch per reader
+            now_failures, error = source.__dict__.get(self.key + "_failures", (0, None))
+            if now_failures > failures:
+                raise error
+            try:
+                value = self.fetch(source)
+            except Exception as e:
+                if not hit or not source.keep_stale:
+                    source.__dict__[self.key + "_failures"] = (now_failures + 1, e)
+                    raise
+                source._noted(e)
+                LOG.warning("%s: cannot refresh %s (%s); keeping the list read %d s ago",
+                            source.name, self.name, e, now - hit[0])
+                source.__dict__[self.key] = (hit[0], now + BREAKER_PAUSE, hit[2])
+                return hit[2]
+            source.__dict__[self.key] = (now, now + source.lists_ttl, value)
+            return value
+
+
 class RemoteSource:
     """A remote service that returns documents for a question.
 
@@ -98,6 +141,9 @@ class RemoteSource:
     description = ""
     pool = 4        # documents fetched per question
     max_bytes = MAX_REMOTE_BYTES
+    cache_ttl = CACHE_TTL       # seconds the documents fetched for one question are reused
+    lists_ttl = LISTS_TTL       # seconds a reference list is reused
+    keep_stale = True           # a list that cannot be read again is kept, and the source answers from it
 
     def __init__(self, http: requests.Session, stopwords: frozenset[str] = frozenset(), lang: str = "pt-PT",
                  timeout: float = 10.0, embed: Embed | None = None):
@@ -183,7 +229,7 @@ class RemoteSource:
         key = " ".join(question.split())
         with self._lock:
             hit = self._cache.get(key)
-            if hit and time.monotonic() - hit[0] < CACHE_TTL:
+            if hit and time.monotonic() - hit[0] < self.cache_ttl:
                 self._cache.move_to_end(key)
                 return hit[1]
             if pending := self._fetching.get(key):
@@ -267,15 +313,22 @@ class RemoteSource:
                 or isinstance(error, OSError) and not isinstance(error, requests.RequestException)
         with self._lock:
             self._fetches += 1
-            self._failures += 1
             if of_service:
                 self._in_a_row += 1
                 if self._in_a_row >= BREAKER_FAILURES:
                     self._paused_until = time.monotonic() + BREAKER_PAUSE
+            self._last_latency_ms = round(seconds * 1000)
+        self._noted(error)
+
+    def _noted(self, error: Exception):
+        """Count a failure in the health of the source, without counting it towards a pause."""
+        status = error.response.status_code if isinstance(error, requests.HTTPError) and error.response is not None \
+            else None
+        with self._lock:
+            self._failures += 1
             # the type and status only: the message of an HTTP error holds the URL, and the URL holds the question
             self._last_error = f"{self.name}: {type(error).__name__}" + (f" {status}" if status else "")
             self._last_error_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-            self._last_latency_ms = round(seconds * 1000)
 
     def get(self, url: str, **params) -> bytes:
         """The body of a GET, cut at ``max_bytes``. The whole request must end within the source timeout."""
@@ -766,21 +819,21 @@ class Ipma(RemoteSource):
     pool = 2
     today = staticmethod(lambda: datetime.now(LISBON).date())
 
-    @cached_property
+    @refreshed
     def places(self) -> dict[str, dict]:
         return {fold(p["local"]): p for p in self.get_json(f"{self.api}/distrits-islands.json")["data"]}
 
-    @cached_property
+    @refreshed
     def weather_types(self) -> dict[int, str]:
         return {t["idWeatherType"]: t["descWeatherTypePT"]
                 for t in self.get_json(f"{self.api}/weather-type-classe.json")["data"]}
 
-    @cached_property
+    @refreshed
     def wind_classes(self) -> dict[int, str]:
         return {int(c["classWindSpeed"]): c["descClassWindSpeedDailyPT"]
                 for c in self.get_json(f"{self.api}/wind-speed-daily-classe.json")["data"]}
 
-    @cached_property
+    @refreshed
     def coast(self) -> dict[str, dict]:
         """The places of the sea forecast, keyed by the folded name before the comma: "Faro, costa" is faro."""
         return {fold(p["local"].split(",")[0]): p for p in self.get_json(f"{self.api}/sea-locations.json")}
@@ -1188,15 +1241,15 @@ class Dgeg(RemoteSource):
     api = "https://precoscombustiveis.dgeg.gov.pt/api/PrecoComb"
     pool = 3        # with the cheapest-station passage, all fit in the default top_k of 4
 
-    @cached_property
+    @refreshed
     def fuels(self) -> dict[str, int]:
         return {fold(f["Descritivo"]): f["Id"] for f in self.get_json(f"{self.api}/GetTiposCombustiveis")["resultado"]}
 
-    @cached_property
+    @refreshed
     def municipalities(self) -> dict[str, dict]:
         return {fold(m["Descritivo"]): m for m in self.get_json(f"{self.api}/GetMunicipios")["resultado"]}
 
-    @cached_property
+    @refreshed
     def districts(self) -> dict[str, int]:
         return {fold(d["Descritivo"]): d["Id"] for d in self.get_json(f"{self.api}/GetDistritos")["resultado"]}
 
@@ -1260,16 +1313,16 @@ class CarrisMetropolitana(RemoteSource):
     max_listed = 60             # lines named for one place
     now = staticmethod(time.time)
 
-    @cached_property
+    @refreshed
     def lines(self) -> dict[str, dict]:
         return {line["id"]: line for line in self.get_json(f"{self.api}/lines")}
 
-    @cached_property
+    @refreshed
     def municipalities(self) -> dict[str, str]:
         return {m["id"]: m["name"] for m in self.get_json(f"{self.api}/locations/municipalities")["data"]
                 if m.get("id") and m.get("name")}
 
-    @cached_property
+    @refreshed
     def localities(self) -> dict[str, str]:
         # the list holds a row with no id or name
         return {loc["id"]: loc["name"] for loc in self.get_json(f"{self.api}/locations/localities")["data"]
@@ -1415,8 +1468,14 @@ class Rss(RemoteSource):
     retrieval ranks the items against the question."""
     feed = ""
     publisher = ""
+    cache_ttl = lists_ttl = 300.0       # a feed changes during the day; every question shares one read of it
+    keep_stale = False                  # old news is not an answer: a feed that cannot be read fails the source
 
     def fetch(self, question: str) -> list[Document]:
+        return self.items
+
+    @refreshed
+    def items(self) -> list[Document]:
         root = ET.fromstring(self.get(self.feed))
         docs = []
         for item in root.iterfind("./channel/item"):

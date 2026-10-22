@@ -100,6 +100,8 @@ Each passage in the response says where it came from:
 
 A wider round asks for more passages from the same documents, so it does not search the service again. evidencia keeps the documents for each question for 10 minutes. Two requests for the same question at the same time share one search.
 
+Some sources read a reference list before they answer, such as the bus lines of Carris Metropolitana, the IPMA places or the DGEG fuels. evidencia keeps each list for one day, then reads it again. When that read fails, the source answers from the list it has, and tries again after 60 seconds. The failure shows in the source health of `GET /v1/sources`. A news feed changes during the day: evidencia reads the RTP feed at most once in 5 minutes, and every question in that time uses the same read. The documents for one RTP question are kept for 5 minutes. When the feed cannot be read, the source fails, and evidencia does not answer from old news.
+
 ## Sites that refuse a client
 
 evidencia sends each request to a public source with the TLS handshake of a browser (curl_cffi), so a site that refuses plain scripts still answers. A site behind a Cloudflare challenge needs a browser to solve it. Run [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) and give its address:
