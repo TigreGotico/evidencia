@@ -1094,3 +1094,49 @@ def test_every_question_shares_one_read_of_a_feed_for_five_minutes(clock):
     clock[0] += 301
     assert source.search("Quem ganhou o Prémio Sakharov?", 2)
     assert len(http.calls) == 2
+
+
+def test_a_feed_that_cannot_be_read_fails_the_source_and_shows_in_its_health(clock):
+    from evidencia.sources import SourceUnavailable
+    down = [False]
+    source = RtpNoticias(FakeHttp(lambda url, params: requests.ConnectionError("down") if down[0] else RSS), STOPWORDS)
+    assert source.search("Quem ganhou o Prémio Sakharov?", 2)
+    down[0] = True
+    clock[0] += 301
+    with pytest.raises(SourceUnavailable):
+        source.search("Quem ganhou o Prémio Sakharov?", 2)
+    health = source.health()
+    assert health["failures"] == 1 and "ConnectionError" in health["last_error"]
+
+
+def test_a_kept_list_shows_its_failed_refresh_in_the_health_and_logs_its_real_age(clock, caplog):
+    from evidencia.sources import BREAKER_PAUSE
+    down = [False]
+    source = CarrisMetropolitana(FakeHttp(lambda url, params: requests.ConnectionError("down")
+                                          if down[0] and url.endswith("/v2/lines") else cm_route(url, params)), STOPWORDS)
+    source.now = lambda: 1792600000
+    source.search("linha 3210?", 2)
+    down[0] = True
+    clock[0] += source.lists_ttl
+    source.search("linha 4600?", 2)
+    clock[0] += BREAKER_PAUSE
+    source.search("linha 3201?", 2)
+    assert source.health()["failures"] == 2 and "ConnectionError" in source.health()["last_error"]
+    ages = [r.getMessage().rsplit("read ", 1)[1] for r in caplog.records if "cannot refresh lines" in r.getMessage()]
+    assert ages == [f"{int(source.lists_ttl)} s ago", f"{int(source.lists_ttl + BREAKER_PAUSE)} s ago"]
+
+
+def test_questions_at_the_same_time_share_one_read_of_the_feed():
+    import threading
+    import time
+    def slow(url, params):
+        time.sleep(0.2)
+        return RSS
+    http = FakeHttp(slow)
+    source = RtpNoticias(http, STOPWORDS)
+    threads = [threading.Thread(target=source.search, args=(f"Notícia número {i}?", 2)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(http.calls) == 1

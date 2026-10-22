@@ -85,8 +85,9 @@ class Document:
 SENTENCE_START = re.compile(r"(?:^|[.!?:;,\n-])[\s¿¡\"'«(]*$")
 
 class refreshed:
-    """A property that is fetched again after ``lists_ttl`` seconds of its source. When the fetch fails and an
-    older value exists, the source keeps the older value and tries again after BREAKER_PAUSE seconds."""
+    """A property that is fetched again after ``lists_ttl`` seconds of its source. Readers at the same time share
+    one fetch. When a fetch fails, the failure counts in the health of the source. A source with ``keep_stale``
+    then keeps the older value and tries again after BREAKER_PAUSE seconds; another source fails the question."""
 
     def __init__(self, fetch: Callable):
         self.fetch = fetch
@@ -97,20 +98,26 @@ class refreshed:
     def __get__(self, source: RemoteSource | None, owner=None):
         if source is None:
             return self
-        at, value = source.__dict__.get(self.key, (None, None))
-        now = time.monotonic()
-        if at is not None and now - at < source.lists_ttl:
+        hit = source.__dict__.get(self.key)
+        if hit and time.monotonic() < hit[1]:
+            return hit[2]
+        with source.__dict__.setdefault(self.key + "_lock", threading.Lock()):
+            hit = source.__dict__.get(self.key)     # (read at, fresh until, value)
+            now = time.monotonic()
+            if hit and now < hit[1]:
+                return hit[2]
+            try:
+                value = self.fetch(source)
+            except Exception as e:
+                if not hit or not source.keep_stale:
+                    raise
+                source._failed(e, time.monotonic() - now)
+                LOG.warning("%s: cannot refresh %s (%s); keeping the list read %d s ago",
+                            source.name, self.name, e, now - hit[0])
+                source.__dict__[self.key] = (hit[0], now + BREAKER_PAUSE, hit[2])
+                return hit[2]
+            source.__dict__[self.key] = (now, now + source.lists_ttl, value)
             return value
-        try:
-            value = self.fetch(source)
-        except Exception as e:
-            if at is None:
-                raise
-            LOG.warning("%s: cannot refresh %s (%s); keeping the list fetched %d s ago",
-                        source.name, self.name, e, now - at)
-            now += BREAKER_PAUSE - source.lists_ttl     # read as fresh until the retry
-        source.__dict__[self.key] = (now, value)
-        return value
 
 
 class RemoteSource:
@@ -130,6 +137,7 @@ class RemoteSource:
     max_bytes = MAX_REMOTE_BYTES
     cache_ttl = CACHE_TTL       # seconds the documents fetched for one question are reused
     lists_ttl = LISTS_TTL       # seconds a reference list is reused
+    keep_stale = True           # a list that cannot be read again is kept, and the source answers from it
 
     def __init__(self, http: requests.Session, stopwords: frozenset[str] = frozenset(), lang: str = "pt-PT",
                  timeout: float = 10.0, embed: Embed | None = None):
@@ -1448,6 +1456,7 @@ class Rss(RemoteSource):
     feed = ""
     publisher = ""
     cache_ttl = lists_ttl = 300.0       # a feed changes during the day; every question shares one read of it
+    keep_stale = False                  # old news is not an answer: a feed that cannot be read fails the source
 
     def fetch(self, question: str) -> list[Document]:
         return self.items
