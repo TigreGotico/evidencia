@@ -108,6 +108,27 @@ model = "minishlab/potion-multilingual-128M"
 
 The [gates](gates.md) then decide which passages to use.
 
+### Vector databases
+
+`vector_db` names an embeddings database plugin that keeps the embeddings instead of evidencia's memory and vector files. `vector_db_config` holds its settings:
+
+```toml
+embedding_model = "minishlab/potion-multilingual-128M"
+data_dir = "collections"
+vector_db = "ovos-qdrant-embeddings-plugin"
+```
+
+| Plugin | Package | Default storage |
+| --- | --- | --- |
+| `ovos-chromadb-embeddings-plugin` | `ovos-chromadb-embeddings-plugin` | A folder on disk, or a chromadb server with `host` and `port` |
+| `ovos-qdrant-embeddings-plugin` | `ovos-qdrant-embeddings-plugin` | A folder on disk, or a qdrant server with `host`, `port` and `api_key` |
+
+Without `host` or `path` in `vector_db_config`, the database keeps its files in `<data_dir>/vectors`. Without `data_dir`, set one of them. evidencia sets `vector_size` from the embedder, unless the configuration sets it.
+
+Each collection has its own database collection, named from the collection name and the embedder. A new embedder therefore starts with an empty database collection and never mixes vectors of two models. At start, evidencia asks the database which passages it holds, and embeds only the passages that it does not hold. A question uses the 200 nearest passages from the database, and fuses them with the BM25 ranking. Dropping a collection drops its database collection.
+
+The JSON files in `data_dir` still hold the passages. BM25 needs them.
+
 ## Near-duplicates
 
 Copies of a page, quotes and reposts give many passages with almost the same text. Each one costs a select question, and they can fill the evidence with one fact.

@@ -65,6 +65,8 @@ class Config:
     embedding_model: str | None = None                 # model2vec model for hybrid retrieval; BM25 only when unset
     embedder: str | None = None                        # an OPM text embeddings plugin, instead of embedding_model
     embedder_config: dict[str, Any] = field(default_factory=dict)
+    vector_db: str | None = None                       # an OPM embeddings database plugin that keeps the vectors
+    vector_db_config: dict[str, Any] = field(default_factory=dict)
     dedupe_threshold: float | None = None              # drop a candidate this similar to one already seen
     ui: bool = True                                    # serve the demo page at /
 
@@ -97,6 +99,13 @@ class Config:
             raise ValueError("set embedder or embedding_model, not both")
         if not isinstance(self.embedder_config, dict):
             raise ValueError(f"embedder_config must be a table, got {self.embedder_config!r}")
+        if not isinstance(self.vector_db_config, dict):
+            raise ValueError(f"vector_db_config must be a table, got {self.vector_db_config!r}")
+        if self.vector_db:
+            if not self.hybrid:
+                raise ValueError("vector_db needs embedding_model or embedder")
+            if not self.data_dir and not {"host", "path"} & set(self.vector_db_config):
+                raise ValueError("vector_db needs data_dir, or a host or path in vector_db_config")
         if self.transport is not None and self.transport not in TRANSPORTS:
             raise ValueError(f"transport must be one of {sorted(TRANSPORTS)}, got {self.transport!r}")
         if isinstance(self.source_timeout, bool) or not isinstance(self.source_timeout, (int, float)) \

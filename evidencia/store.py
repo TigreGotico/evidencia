@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 from urllib.parse import quote
 
-from evidencia.index import Collection, Embed, Passage
+from evidencia.index import Collection, Embed, Passage, db_collection_name
 
 LOG = logging.getLogger("evidencia")
 
@@ -63,7 +63,8 @@ class Store:
             self._file(name).unlink(missing_ok=True)
             self._vectors_file(name).unlink(missing_ok=True)
 
-    def load(self, embed: Embed | None = None) -> dict[str, Collection]:
+    def load(self, embed: Embed | None = None, db=None) -> dict[str, Collection]:
+        """Every collection on disk. With ``db``, the rows live in that vector database, not in vector files."""
         collections = {}
         for path in sorted(self.path.glob("*.json")):
             # only a file that cannot be read is set aside; an index that cannot be built stops the start
@@ -76,8 +77,9 @@ class Store:
                 LOG.error("collection file %s cannot be read (%s); moved to %s", path, e, aside)
                 path.replace(aside)
                 continue
-            stored = self._stored_vectors(name, passages) if embed else None
-            collections[name] = col = Collection(name, lang, passages, embed, stored)
+            stored = self._stored_vectors(name, passages) if embed and db is None else None
+            db_name = db_collection_name(name, self.embedder_id) if db is not None else ""
+            collections[name] = col = Collection(name, lang, passages, embed, stored, db, db_name)
             if stored is None and col.vectors is not None:
                 self.save(col)      # embedded at this start; the next start reads the rows
         return collections
