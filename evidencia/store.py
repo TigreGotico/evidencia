@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import threading
+import uuid
 from pathlib import Path
 from urllib.parse import quote
 
@@ -28,6 +29,17 @@ class Store:
         self.width = width
         self.path.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+
+    def instance_id(self) -> str:
+        """A random id made at the first start and kept in the directory. Services that share a vector database
+        server keep apart by it, also when their directories have the same path in different containers."""
+        path = self.path / "instance.id"
+        try:
+            with open(path, "x", encoding="utf-8") as f:
+                f.write(uuid.uuid4().hex)
+        except FileExistsError:
+            pass
+        return path.read_text(encoding="utf-8").strip()
 
     def _file(self, name: str) -> Path:
         # quote() leaves no "/" in the file name, so a collection name cannot reach outside the directory

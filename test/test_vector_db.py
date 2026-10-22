@@ -202,7 +202,7 @@ def test_the_engine_loads_the_plugin_and_keeps_its_files_in_the_data_dir(tmp_pat
     db = MemoryDB.instances[-1]
     assert plugins == ["ovos-memory-db"]
     assert db.config == {"distance_metric": "cosine", "path": str(tmp_path / "vectors"), "vector_size": 3}
-    name = db_collection_name("geo", e.embed.id, str(tmp_path.resolve()))
+    name = db_collection_name("geo", e.embed.id, (tmp_path / "instance.id").read_text())
     assert sorted(db.collections[name]) == sorted(p.id for p in e.collection("geo").passages)
     assert not list(tmp_path.glob("*.vectors.npz"))
 
@@ -240,6 +240,21 @@ def test_a_drop_holds_the_collections_lock_until_the_rows_are_gone(tmp_path, plu
     db.delete_collection = lambda name: held.append(e._collections_lock.locked()) or delete(name)
     e.drop_collection("geo")
     assert held == [True]
+
+
+def test_the_namespace_follows_the_directory_and_not_its_path(tmp_path, plugins, monkeypatch):
+    first = engine(tmp_path / "collections")
+    first.add_document("geo", DOC, "geo.txt")
+    db = MemoryDB.instances[-1]
+    monkeypatch.setattr(pipeline_module, "load_embeddings_db_plugin", lambda name: lambda config: db)
+    (tmp_path / "collections").rename(tmp_path / "moved")
+    moved = engine(tmp_path / "moved")
+    assert moved.db_namespace == first.db_namespace and moved.embed.texts == []
+    other = engine(tmp_path / "collections")       # another container's directory at the same path
+    other.add_document("geo", DOC, "geo.txt")
+    assert other.db_namespace != first.db_namespace
+    engine(tmp_path / "collections")               # a restart of the other service rebuilds only its own rows
+    assert sorted(len(rows) for rows in db.collections.values()) == [4, 4]
 
 
 def test_two_services_on_one_database_keep_their_collections_apart(tmp_path, plugins, monkeypatch):

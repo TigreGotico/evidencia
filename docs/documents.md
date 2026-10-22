@@ -125,7 +125,7 @@ vector_db = "ovos-qdrant-embeddings-plugin"
 
 Without `host` or `path` in `vector_db_config`, the database keeps its files in `<data_dir>/vectors`. Without `data_dir`, set one of them. evidencia sets `vector_size` from the embedder, unless the configuration sets it.
 
-Each collection has its own database collection. Its name comes from the collection name, the embedder and the full path of `data_dir`. A new embedder therefore starts with an empty database collection and never mixes vectors of two models. Two services that share a database server keep their collections apart. A service that moves its `data_dir` starts new database collections and embeds its passages again. Without `data_dir`, the passages do not persist, and each start uses new database collections.
+Each collection has its own database collection. Its name comes from the collection name, the embedder and a random id that evidencia writes to `<data_dir>/instance.id` at the first start. A new embedder therefore starts with an empty database collection and never mixes vectors of two models. Two services that share a database server keep their collections apart, also when their `data_dir` has the same path in two containers. A `data_dir` that moves keeps its id and its database collections. Without `data_dir`, the passages do not persist, and each start uses new database collections.
 
 At start, evidencia asks the database which passages it holds, and embeds only the passages that it does not hold. When the database holds more rows than there are passages, evidencia rebuilds the database collection from the rows of its passages, without embedding them again. Such rows come from a write that stopped before evidencia saved the passages.
 

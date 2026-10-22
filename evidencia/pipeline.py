@@ -129,10 +129,11 @@ class Evidencia:
             self.embed = Embedder(self.config.embedding_model) if self.config.embedding_model else None
         width = self.embed.load() if self.embed else None
         self.vector_db = self._vector_db(width) if self.config.vector_db else None
-        # services that share a database server keep apart by their data_dir; without one nothing persists
-        self.db_namespace = os.path.realpath(self.config.data_dir) if self.config.data_dir else uuid.uuid4().hex
         self.store = Store(self.config.data_dir, self.embed.id if self.embed else None,
                            width) if self.config.data_dir else None
+        # services that share a database server keep apart by their store; without one nothing persists
+        self.db_namespace = ((self.store.instance_id() if self.store else uuid.uuid4().hex)
+                             if self.vector_db is not None else "")
         self.collections: dict[str, Collection] = self.store.load(self.embed, self.vector_db, self.db_namespace) if self.store else {}
         if sources is None:
             sources = build_sources(self.config.sources, self.config.user_agent,
