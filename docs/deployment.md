@@ -122,10 +122,10 @@ The `ovos-evidencia-plugin` package gives an OVOS persona three plugins. Each on
 | Plugin | Persona key | Does |
 | --- | --- | --- |
 | `ovos-evidencia-chat-plugin` | `handlers` | Answers with the gated answer. On an abstention it gives no answer, so the persona tries its next handler |
-| `ovos-evidencia-retrieval-plugin` | `handlers` | Returns the passages that pass the select gate, with their select probability |
+| `ovos-evidencia-retrieval-plugin` | `handlers` | Returns the evidence passages, with their select probability. On an abstention it returns no passages |
 | `ovos-evidencia-memory-plugin` | `memory_module` | Adds the passages that pass the gates to the context of another chat engine. On an abstention it adds the `no_evidence` note, so the chat engine can say that it does not know. `inject_mode` places the evidence |
 
-The three plugins take the connection and question settings of the chat plugin in [Vendor APIs](vendor-apis.md#chat-through-ovos-persona-server). Each plugin answers only a question in the language of the evidencia service, so the persona must run in that language.
+The three plugins take the connection and question settings of the chat plugin in [Vendor APIs](vendor-apis.md#chat-through-ovos-persona-server). The chat and retrieval plugins answer only a question in the language of the evidencia service, so the persona must run in that language.
 
 ovos-persona-server serves such a persona to the vendor APIs. An OVOS voice assistant uses it as any other persona.
 

@@ -47,13 +47,15 @@ The plugin answers only a question in the language of the evidencia service. ovo
 {"lang": "pt-PT"}
 ```
 
-Without it, every question gets no answer, and ovos-persona-server returns 422.
+Without it, every question gets no answer. Refer to the abstention behaviour below for the reply.
 
 Start the server:
 
 ```bash
-persona-env/bin/ovos-persona-server --persona evidencia.json --port 8337
+persona-env/bin/ovos-persona-server --persona evidencia.json --host 127.0.0.1 --port 8337
 ```
+
+ovos-persona-server checks no API key: it accepts the vendor key fields and ignores them. The persona file holds the evidencia key, so any client that reaches the port can query the collection. Keep `--host 127.0.0.1`, or put an authenticating proxy in front of the port.
 
 Each API has its own path prefix:
 
@@ -81,11 +83,11 @@ print(reply.choices[0].message.content)
 With the Ollama API:
 
 ```bash
-curl http://127.0.0.1:8337/ollama/api/chat -d '{"model": "evidencia", "stream": false,
+curl http://127.0.0.1:8337/ollama/api/chat -H 'Content-Type: application/json' -d '{"model": "evidencia", "stream": false,
   "messages": [{"role": "user", "content": "Qual é a capital de Portugal?"}]}'
 ```
 
-The reply is the gated answer, or the abstain text when evidencia abstains and `abstain_message` is true. A stream sends the same text. When evidencia abstains and no other handler answers, ovos-persona-server returns 422.
+The reply is the gated answer, or the abstain text when evidencia abstains and `abstain_message` is true. A stream sends the same text. When evidencia abstains and no other handler answers, a request without a stream gets HTTP 422. An OpenAI stream gets HTTP 200 and then an `error` event of type `persona_no_answer`. The openai SDK raises `APIError` for that event.
 
 To fall back to another engine when evidencia abstains, leave `abstain_message` false and list the other engine after the evidencia handler. Then evidencia answers what its evidence supports, and the other engine answers the rest. Such an answer is not checked by any gate.
 
@@ -123,6 +125,8 @@ evidencia ignores `filters`, `ranking_options` and `rewrite_query`. The results 
 | 404 | The collection does not exist |
 | 422 | A setting or the query is not valid |
 | 503 | The decision backend is unavailable |
+
+The other statuses are the same as on `/v1/answer`. Refer to [HTTP API](api.md#errors).
 
 An error body is `{"detail": "<reason>"}`, as on the other routes, and not the OpenAI `{"error": {...}}` shape. Some older clients show only the status for such a body.
 

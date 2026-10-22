@@ -323,9 +323,11 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
         check_targets(body)
         return engine.answer(body.question, body.collection, body.sources, settings=settings(body))
 
-    def streamed(request: Request, work, frame) -> EventStream:
-        """Runs ``work(emit)`` in a thread and sends what ``frame`` makes of each event as server-sent events.
-        ``work`` returns the result, sent as the ``result`` event; a failure is sent as the ``error`` event."""
+    @app.post("/v1/answer/stream", dependencies=[Depends(auth)])
+    def answer_stream(body: StreamIn, request: Request):
+        """Server-sent events: one event per pipeline step, then ``result`` with the body of /v1/answer or /v1/context."""
+        check_targets(body)
+        cfg = settings(body)
         events: queue.Queue = queue.Queue()
         left = threading.Event()    # the client closed the stream
 
@@ -336,7 +338,12 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
 
         def run():
             try:
-                events.put(("result", work(emit)))
+                if body.generate:
+                    result = engine.answer(body.question, body.collection, body.sources, on_event=emit, settings=cfg)
+                else:
+                    result = engine.context(body.question, body.collection, body.sources, on_event=emit,
+                                            settings=cfg).as_dict()
+                events.put(("result", result))
             except StreamClosed:
                 LOG.info("answer stream closed by the client; stopped")
             except DecisionUnavailable as e:
@@ -366,23 +373,10 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
                     continue
                 if item is None:
                     return
-                if text := frame(*item):
-                    yield text
+                name, data = item
+                yield f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
         return EventStream(stream(), left)
-
-    @app.post("/v1/answer/stream", dependencies=[Depends(auth)])
-    def answer_stream(body: StreamIn, request: Request):
-        """Server-sent events: one event per pipeline step, then ``result`` with the body of /v1/answer or /v1/context."""
-        check_targets(body)
-        cfg = settings(body)
-
-        def work(emit):
-            if body.generate:
-                return engine.answer(body.question, body.collection, body.sources, on_event=emit, settings=cfg)
-            return engine.context(body.question, body.collection, body.sources, on_event=emit, settings=cfg).as_dict()
-
-        return streamed(request, work, lambda name, data: f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n")
 
     @app.post("/v1/vector_stores/{collection}/search", dependencies=[Depends(auth)])
     def vector_store_search(collection: str, body: VectorSearchIn):
