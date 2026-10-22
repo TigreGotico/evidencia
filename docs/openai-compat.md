@@ -9,6 +9,8 @@ evidencia answers two OpenAI routes, so an OpenAI client and an OpenAI RAG tool 
 
 Set the client's base URL to `http://<host>:8080/v1`. Use `api_key` as the API key. When the server sets no `api_key`, any key works.
 
+The other OpenAI routes are not served. `GET /v1/models` names the decision model, for other evidencia instances, so an OpenAI client lists no models there. Give the model name in each request.
+
 ## Chat completions
 
 The last user message is the question. evidencia ignores the other messages and the OpenAI fields that it does not use, such as `temperature`. The `model` field names what to search:
@@ -73,7 +75,7 @@ for hit in page.data:
 | `content` | One text part with the passage |
 | `attributes` | `passage_id`, `url` and `origin`, the collection or public source |
 
-The results are the evidence passages, at most `max_num_results`. When the evidence is not enough to answer, the page has no results, and its `evidencia` field gives `abstained` and `abstained_at`. When the decision backend is unavailable, the search returns 503, also with `fail_open` true, because a search result has no field that says no gate checked it.
+evidencia ignores `filters`, `ranking_options` and `rewrite_query`. The results are the evidence passages, at most `max_num_results`. When the evidence is not enough to answer, the page has no results, and its `evidencia` field gives `abstained` and `abstained_at`. When the decision backend is unavailable, the search returns 503, also with `fail_open` true, because a search result has no field that says no gate checked it.
 
 `ovos-openai-rag-memory-plugin` works with this route: set its `api_url` to `http://<host>:8080/v1` and its `vector_store_id` to the collection.
 
@@ -86,7 +88,7 @@ The results are the evidence passages, at most `max_num_results`. When the evide
 | 422 | The messages hold no user message, the model names no collection and the body no source, or a setting is not valid |
 | 503 | The decision backend is unavailable: for a chat completion when `fail_open` is false, for a search always |
 
-The other statuses are the same as for `/v1/answer`. Refer to [HTTP API](api.md#errors).
+The other statuses are the same as for `/v1/answer`. Refer to [HTTP API](api.md#errors). An error body is `{"detail": "<reason>"}`, as on the other routes, and not the OpenAI `{"error": {...}}` shape. Some older clients show only the status for such a body. An error inside a stream uses the OpenAI shape.
 
 ---
 [← HTTP API](api.md) · [Home](index.md) · [Configuration →](configuration.md)

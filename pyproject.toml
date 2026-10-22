@@ -57,7 +57,7 @@ generators = [
 test = [
     "pytest>=8",
     "httpx>=0.27",
-    "openai>=1.60",
+    "openai>=3.0",     # the tests pass a Starlette TestClient, an httpx2 client, as http_client
     "mcp>=2.3",
 ]
 

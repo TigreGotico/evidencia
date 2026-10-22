@@ -140,3 +140,10 @@ def test_an_unknown_vector_store_is_not_found():
     client, _ = sdk()
     with pytest.raises(openai.NotFoundError, match="no collection 'nada'"):
         client.vector_stores.search("nada", query=Q)
+
+
+@pytest.mark.parametrize("part", [{"type": "text", "text": None}, {"type": "text", "text": 5}, {"text": "x"}])
+def test_a_content_part_that_is_not_valid_is_refused(part):
+    client, _ = sdk()
+    with pytest.raises(openai.UnprocessableEntityError):
+        ask(client, content=[part])

@@ -80,13 +80,18 @@ class RetrieveIn(QuestionIn):
     k: int = Field(default=8, ge=1, le=100)
 
 
+class ContentPartIn(BaseModel):
+    type: str
+    text: str = ""
+
+
 class ChatMessageIn(BaseModel):
     role: str
-    content: str | list[dict] | None = None
+    content: str | list[ContentPartIn] | None = None
 
     def text(self) -> str:
         if isinstance(self.content, list):
-            return " ".join(part.get("text", "") for part in self.content if part.get("type") == "text")
+            return " ".join(part.text for part in self.content if part.type == "text")
         return self.content or ""
 
 
