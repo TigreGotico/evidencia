@@ -7,7 +7,7 @@ evidencia reads one TOML file, then applies environment variables over it. Give 
 ```toml
 generator = "amalia"
 api_key = "change-me"
-grounded_threshold = 0.8
+grounded_threshold = 0.9
 data_dir = "collections"
 sources = ["pt.wikipedia", "wikidata", "dicionario-aberto"]
 embedding_model = "minishlab/potion-multilingual-128M"
@@ -33,7 +33,7 @@ An unknown key stops the service when it starts, with an error that names the ke
 | `lang` | `pt-PT` | Language of the gate questions and messages. pt-PT is the only language |
 | `select_threshold` | `0.5` | Minimum select probability to keep a passage. From 0 to 1 |
 | `sufficient_threshold` | `0.5` | Minimum sufficiency probability to answer. From 0 to 1 |
-| `grounded_threshold` | `0.5` | Minimum grounding probability to return an answer. From 0 to 1 |
+| `grounded_threshold` | `0.8` | Minimum grounding probability to return an answer. From 0 to 1 |
 | `n_candidates` | `8` | Passages retrieved in the first round. Each later round doubles it |
 | `top_k` | `4` | Selected passages kept as evidence |
 | `max_rounds` | `2` | Retrieval rounds before evidencia stops |

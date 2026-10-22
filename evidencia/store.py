@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import threading
 from pathlib import Path
 from urllib.parse import quote
 
-from evidencia.index import Collection, Embed
+from evidencia.index import Collection, Embed, Passage
+
+LOG = logging.getLogger("evidencia")
 
 MAX_STEM = 200     # leaves room for ".json.tmp" in a 255-byte file name
 
@@ -43,6 +46,15 @@ class Store:
     def load(self, embed: Embed | None = None) -> dict[str, Collection]:
         collections = {}
         for path in sorted(self.path.glob("*.json")):
-            collection = Collection.from_dict(json.loads(path.read_text(encoding="utf-8")), embed)
-            collections[collection.name] = collection
+            # only a file that cannot be read is set aside; an index that cannot be built stops the start
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                name, lang = data["name"], data.get("lang", "pt-PT")
+                passages = [Passage(**{**p, "score": 0.0}) for p in data["passages"]]
+            except (OSError, ValueError, KeyError, TypeError) as e:
+                aside = path.with_suffix(".json.corrupt")
+                LOG.error("collection file %s cannot be read (%s); moved to %s", path, e, aside)
+                path.replace(aside)
+                continue
+            collections[name] = Collection(name, lang, passages, embed)
         return collections

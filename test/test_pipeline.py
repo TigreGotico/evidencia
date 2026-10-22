@@ -63,7 +63,7 @@ def test_grounded_answer_is_returned(make_engine):
     result = make_engine(chat=chat).answer(Q, "geo")
     assert result["answer"] == "Lisboa."
     assert result["abstained_at"] is None
-    assert result["grounded"] == {"p": 0.9, "threshold": 0.5, "passed": True}
+    assert result["grounded"] == {"p": 0.9, "threshold": 0.8, "passed": True}
     assert chat.prompts == [f"Evidência:\n[1] {CAPITAL}\n\nPergunta: {Q}"]
 
 
@@ -76,8 +76,10 @@ def test_ungrounded_answer_is_suppressed(make_engine):
 
 
 def test_threshold_is_inclusive(make_engine):
-    result = make_engine(decision=StubDecision(sufficient=0.5, grounded=0.5)).answer(Q, "geo")
+    result = make_engine(decision=StubDecision(sufficient=0.5, grounded=0.8)).answer(Q, "geo")
     assert result["answer"] == "Lisboa."
+    below = make_engine(decision=StubDecision(sufficient=0.5, grounded=0.79)).answer(Q, "geo")
+    assert (below["answer"], below["abstained_at"]) == (None, "grounded")
 
 
 def test_fail_open_answers_ungated(make_engine):

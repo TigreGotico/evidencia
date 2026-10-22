@@ -200,7 +200,3 @@ class Collection:
     def as_dict(self) -> dict:
         return {"name": self.name, "lang": self.lang, "passages": [asdict(p) for p in self.passages]}
 
-    @classmethod
-    def from_dict(cls, data: dict, embed: Embed | None = None) -> Collection:
-        passages = [Passage(**{**p, "score": 0.0}) for p in data["passages"]]
-        return cls(data["name"], data.get("lang", "pt-PT"), passages, embed)

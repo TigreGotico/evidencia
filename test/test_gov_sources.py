@@ -468,3 +468,26 @@ def test_gleif_searches_a_valid_nipc_as_the_registration_number():
     docs = Gleif(http, STOPWORDS).fetch("de quem é o nipc 500697256 ou 500697257?")
     assert [c.get("filter[entity.registeredAs]") for _, c in http.calls] == ["500697256"]
     assert [d.key for d in docs] == ["529900CLC3WDMGI9VH80"]
+
+
+def test_a_nine_digit_number_is_a_nif_only_when_the_question_says_so():
+    http = FakeHttp(lambda url, params: {"isValid": True, "userError": "VALID", "name": "X", "address": ""})
+    assert Vies(http, STOPWORDS).fetch("Liguei para o 912345675 e ninguém atendeu.") == []
+    assert Gleif(FakeHttp(lambda url, params: {"data": []}), STOPWORDS).fetch("liguei para o 912345675") == []
+    assert len(Vies(http, STOPWORDS).fetch("De quem é o contribuinte 912345675?")) == 1
+    for asked in ("Qual é o número fiscal 912345675?", "De quem é PT912345675?", "NIF912345675 é de quem?",
+                  "Os contribuintes 912345675 e 500697256", "número de identificação fiscal 912345675",
+                  "n.º de pessoa coletiva 912345675"):
+        assert len(Vies(http, STOPWORDS).fetch(asked)) >= 1, asked
+
+
+def test_ipma_says_hoje_for_the_day_in_lisbon_not_on_the_server_clock(monkeypatch):
+    from datetime import datetime, timezone
+    import evidencia.sources
+
+    class LateUtc(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 21, 23, 30, tzinfo=timezone.utc).astimezone(tz)
+    monkeypatch.setattr(evidencia.sources, "datetime", LateUtc, raising=False)
+    assert Ipma.today() == date(2026, 10, 22)

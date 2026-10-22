@@ -12,11 +12,12 @@ import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from functools import cached_property
 from html import unescape
 from typing import Protocol
 from urllib.parse import quote, urljoin
+from zoneinfo import ZoneInfo
 
 import requests
 from unblock_requests import CloudflareSession
@@ -30,6 +31,9 @@ NAME = re.compile(r"[A-ZÀ-Ý][\w-]*(?:\s+(?:(?:d[aeo]s?)\s+)?[A-ZÀ-Ý][\w-]*)*
 CACHE_TTL = 600.0               # seconds a fetched document set is reused
 POSTAL_CODE = re.compile(r"\b\d{4}-\d{3}\b")
 NIF = re.compile(r"(?<![\d-])[1-9]\d{8}(?![\d-])")
+# a phone number also has 9 digits, so a number is a NIF only in a question about a tax number
+NIF_CONTEXT = re.compile(r"\b(?:nifs?|nipcs?|contribuintes?|iva|vat|fiscal|colec?tiva)\b|\b(?:pt|nif|nipc)\d{9}\b", re.I)
+LISBON = ZoneInfo("Europe/Lisbon")
 PAGE_PRE = re.compile(rb"\A\s*<html.*?<pre[^>]*>(.*?)</pre>", re.S | re.I)   # a JSON reply as a browser shows it
 DOMAIN = re.compile(r"(?<![\w.-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+pt\b", re.I)
 
@@ -594,7 +598,7 @@ class Ipma(RemoteSource):
     description = "Five-day forecasts and weather warnings for the district capitals and the islands."
     api = "https://api.ipma.pt/open-data"
     pool = 2
-    today = staticmethod(date.today)
+    today = staticmethod(lambda: datetime.now(LISBON).date())
 
     @cached_property
     def places(self) -> dict[str, dict]:
@@ -681,6 +685,11 @@ class DadosGov(RemoteSource):
         return Document(dataset["id"], title, dataset.get("page", ""), f"# {title}\n\n{text}", "markdown")
 
 
+def nifs(question: str) -> list[str]:
+    """The NIFs in a question that names a tax number, with a valid check digit."""
+    return [n for n in NIF.findall(question) if valid_nif(n)] if NIF_CONTEXT.search(question) else []
+
+
 def valid_nif(nif: str) -> bool:
     """The check digit of a Portuguese NIF or NIPC: the weighted sum of the first eight digits, modulo 11."""
     check = 11 - sum(int(d) * w for d, w in zip(nif[:8], range(9, 1, -1))) % 11
@@ -699,9 +708,9 @@ class Vies(RemoteSource):
     pool = 3
 
     def fetch(self, question: str) -> list[Document]:
-        nifs = [n for n in dict.fromkeys(NIF.findall(question)) if valid_nif(n)][:self.pool]
-        with ThreadPoolExecutor(max(len(nifs), 1)) as pool:
-            return list(pool.map(self.company, nifs))
+        numbers = list(dict.fromkeys(nifs(question)))[:self.pool]
+        with ThreadPoolExecutor(max(len(numbers), 1)) as pool:
+            return list(pool.map(self.company, numbers))
 
     def company(self, nif: str) -> Document:
         url = f"{self.api}/{nif}"
@@ -734,7 +743,7 @@ class Gleif(RemoteSource):
 
     def fetch(self, question: str) -> list[Document]:
         searches = [{"filter[entity.legalName]": name} for name in self.names(question)[:2]]
-        searches += [{"filter[entity.registeredAs]": nif} for nif in NIF.findall(question) if valid_nif(nif)][:2]
+        searches += [{"filter[entity.registeredAs]": nif} for nif in nifs(question)][:2]
         if not searches:
             return []
         with ThreadPoolExecutor(len(searches)) as pool:
@@ -917,7 +926,7 @@ def build_sources(names: list[str], user_agent: str, stopwords: frozenset[str], 
         raise ValueError(f"unknown sources {sorted(unknown)}; known: {sorted(CATALOG)}")
     from curl_cffi.const import CurlOpt
     http = CloudflareSession(mode=transport or "curl_cffi", flaresolverr_url=flaresolverr_url, flaresolverr_fallback=True,
-                             browserless_url=browserless_url, wayback_fallback=False, env_prefix="EVIDENCIA",
+                             browserless_url=browserless_url, wayback_fallback=False, env_prefix="EVIDENCIA_SESSION",   # Config reads the documented variables
                              flaresolverr_timeout_ms=int(timeout * 1000), browserless_timeout_ms=int(timeout * 1000),
                              # curl reads a whole reply before the source sees it, so curl stops at the largest cap
                              curl_options={CurlOpt.MAXFILESIZE_LARGE: max(CATALOG[n].max_bytes for n in names or CATALOG)})

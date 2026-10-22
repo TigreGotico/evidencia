@@ -73,7 +73,7 @@ Refer to [Public sources](sources.md).
 
 | Field | Contents |
 | --- | --- |
-| `question` | The question, in European Portuguese |
+| `question` | The question, in European Portuguese. At most 2000 characters |
 | `collection` | A collection to search. Optional |
 | `sources` | A list of enabled source names to search. Optional, default `[]` |
 
@@ -167,7 +167,7 @@ An answered question (`candidates` shortened):
   "answer": "Lisboa é a capital de Portugal [1].",
   "draft": "Lisboa é a capital de Portugal [1].",
   "cited": [1],
-  "grounded": {"p": 0.9967, "threshold": 0.5, "passed": true},
+  "grounded": {"p": 0.9967, "threshold": 0.8, "passed": true},
   "message": null
 }
 ```
@@ -222,14 +222,14 @@ The stream ends after `result` or `error`. When the client closes the stream, ev
 
 ## Check grounding
 
-`POST /v1/check/grounding` takes `question`, `evidence` (a list of strings) and `answer`:
+`POST /v1/check/grounding` takes `question`, `evidence` (a list of at most 100 strings) and `answer`. An evidence string and the answer can have at most 20 000 characters each:
 
 ```json
 {"question": "Qual é a capital de Portugal?", "evidence": ["Lisboa é a capital de Portugal."], "answer": "O Porto."}
 ```
 
 ```json
-{"p": 0.1007, "threshold": 0.5, "passed": false}
+{"p": 0.1007, "threshold": 0.8, "passed": false}
 ```
 
 This call does not apply `fail_open`. When the backend is unavailable, it returns 503.
@@ -259,7 +259,7 @@ This call does not apply `fail_open`. When the backend is unavailable, it return
   "generator": "amalia",
   "generator_configured": true,
   "fail_open": true,
-  "thresholds": {"select": 0.5, "sufficient": 0.5, "grounded": 0.5},
+  "thresholds": {"select": 0.5, "sufficient": 0.5, "grounded": 0.8},
   "retrieval": {"n_candidates": 8, "top_k": 4, "max_rounds": 2, "hybrid": true, "dedupe_threshold": 0.95},
   "sources": ["arquivo.pt", "dicionario-aberto", "pt.wikipedia", "pt.wikisource", "pt.wiktionary", "wikidata"],
   "collections": 1
@@ -277,7 +277,8 @@ An error body is `{"detail": "<reason>"}`. Errors from the decision backend, the
 | 401 | The bearer token is missing or wrong |
 | 403 | A URL was sent, and URL ingestion is off |
 | 404 | The collection or the document does not exist |
-| 413 | The document is larger than `max_document_bytes` |
+| 411 | The request body has no `Content-Length` |
+| 413 | The document is larger than `max_document_bytes`, or the request body is larger than 6 times `max_document_bytes` plus 64 KiB |
 | 422 | The request body is not valid; it names no collection and no source; it names a source that is not enabled, or a collection with the name of a requested source; a document has no text; a file has an unknown format, is not UTF-8 or is not a readable PDF; a URL redirects or its text does not decode; or the decision model refused the request |
 | 500 | An unexpected error in the answer stream. The `error` event carries it |
 | 502 | The chat model is not configured or failed, or a URL could not be fetched. The reasons for the chat model are below |

@@ -56,7 +56,7 @@ def test_retrieve_scores_every_passage(client):
 def test_check_grounding():
     c = client_for(decision=StubDecision(grounded=0.25))
     r = c.post("/v1/check/grounding", json={"question": Q, "evidence": ["Lisboa é a capital."], "answer": "Porto."})
-    assert r.json() == {"p": 0.25, "threshold": 0.5, "passed": False}
+    assert r.json() == {"p": 0.25, "threshold": 0.8, "passed": False}
 
 
 def test_unknown_collection_is_404(client):
@@ -210,7 +210,8 @@ def test_models_lets_another_instance_report_reachable():
 def web():
     """A real HTTP server for URL ingestion: /big streams 1 MB, /moved redirects, /page is a small page."""
     import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as HTTPServer
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -221,6 +222,23 @@ def web():
                 self.send_response(302)
                 self.send_header("location", "/page")
                 self.end_headers()
+                return
+            if self.path == "/slowhead":
+                self.wfile.write(b"HTTP/1.1 200 OK\r\n")
+                for _ in range(40):
+                    self.wfile.write(b"X-Wait: 1\r\n")
+                    self.wfile.flush()
+                    time.sleep(0.1)
+                self.wfile.write(b"\r\nLisboa.")
+                return
+            if self.path == "/slow":
+                self.send_response(200)
+                self.send_header("content-type", "text/plain; charset=utf-8")
+                self.end_headers()
+                for _ in range(50):
+                    self.wfile.write(b"x")
+                    self.wfile.flush()
+                    time.sleep(0.1)
                 return
             body = b"x " * 500_000 if self.path == "/big" else "Lisboa é a capital.".encode()
             self.send_response(200)
@@ -270,3 +288,57 @@ def test_url_without_charset_is_utf8(web):
     assert c.post("/v1/collections/geo/documents", json={"source": "p", "url": web + "/bare"}).status_code == 200
     body = c.post("/v1/retrieve", json={"collection": "geo", "question": "capital", "k": 1}).json()
     assert body["passages"][0]["text"] == "Lisboa é a capital."
+
+
+def test_a_document_fetched_by_url_cites_its_url(web):
+    c = client_for(allow_url_ingest=True)
+    c.post("/v1/collections/geo/documents", json={"source": "page", "url": web + "/page"})
+    body = c.post("/v1/retrieve", json={"collection": "geo", "question": "capital", "k": 1}).json()
+    assert body["passages"][0]["url"] == web + "/page"
+
+
+def test_a_request_body_larger_than_the_limit_is_refused_before_it_is_read():
+    c = client_for(max_document_bytes=1000)
+    r = c.post("/v1/answer", json={"collection": "geo", "question": "capital " * 400_000})
+    assert r.status_code == 413
+
+
+def test_a_question_longer_than_the_limit_is_422():
+    c = client_for()
+    c.post("/v1/collections/geo/documents", json={"source": "geo.txt", "text": DOC})
+    assert c.post("/v1/answer", json={"collection": "geo", "question": "a" * 2001}).status_code == 422
+    assert c.post("/v1/check/grounding", json={"question": Q, "evidence": [DOC], "answer": "a" * 20_001}).status_code == 422
+
+
+def test_a_url_that_trickles_is_stopped_at_the_fetch_deadline(web, monkeypatch):
+    import time
+    import evidencia.api
+    monkeypatch.setattr(evidencia.api, "URL_FETCH_TIMEOUT", 0.5)
+    c = client_for(allow_url_ingest=True)
+    started = time.monotonic()
+    r = c.post("/v1/collections/geo/documents", json={"source": "slow", "url": web + "/slow"})
+    assert r.status_code == 502 and time.monotonic() - started < 2.0
+
+
+def test_a_url_that_sends_its_headers_slowly_is_stopped_at_the_fetch_deadline(web, monkeypatch):
+    import time
+    import evidencia.api
+    monkeypatch.setattr(evidencia.api, "URL_FETCH_TIMEOUT", 0.5)
+    c = client_for(allow_url_ingest=True)
+    started = time.monotonic()
+    r = c.post("/v1/collections/geo/documents", json={"source": "slow", "url": web + "/slowhead"})
+    assert r.status_code == 502 and time.monotonic() - started < 2.0
+
+
+def test_a_body_without_a_length_is_refused():
+    c = client_for()
+    r = c.post("/v1/answer", content=iter([b'{"collection": "geo", ', b'"question": "capital"}']),
+               headers={"content-type": "application/json"})
+    assert r.status_code == 411
+
+
+def test_a_document_removed_while_its_collection_is_dropped_is_404(client):
+    def gone(name, source):
+        raise KeyError(name)
+    client.app.state.engine.remove_document = gone
+    assert client.delete("/v1/collections/geo/documents/geo.txt").status_code == 404

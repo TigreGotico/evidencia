@@ -18,4 +18,6 @@ RUN useradd --create-home --uid 1000 evidencia && mkdir -p /models /collections 
 USER evidencia
 VOLUME /models /collections
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=4)"
 CMD ["evidencia", "serve", "--host", "0.0.0.0", "--port", "8080"]

@@ -34,13 +34,18 @@ class Service:
             resp = getattr(self.http, method)(f"{self.url}{path}", **kwargs)
         except requests.ConnectionError:
             raise ServiceError(f"cannot reach the evidencia service at {self.url}; is it running?") from None
+        except requests.RequestException as e:
+            raise ServiceError(f"the evidencia service at {self.url} did not answer: {e}") from None
         if resp.status_code >= 400:
             try:
                 detail = resp.json().get("detail")
             except ValueError:
                 detail = resp.text
             raise ServiceError(f"evidencia returned {resp.status_code}: {detail}")
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError:
+            raise ServiceError(f"{self.url}{path} returned a reply that is not JSON: {resp.text[:200]}") from None
 
 
 def _passage(p: dict) -> dict:

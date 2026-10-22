@@ -134,3 +134,9 @@ def test_the_transport_is_what_the_config_says_and_not_a_stray_environment_varia
     monkeypatch.setenv("EVIDENCIA_TRANSPORT", "wayback")
     http = build_sources(["wikidata"], "ua", STOPWORDS, "pt-PT", 5)["wikidata"].http
     assert http.cf_mode == "curl_cffi"
+
+
+def test_an_undocumented_environment_variable_does_not_reach_the_session(monkeypatch):
+    monkeypatch.setenv("EVIDENCIA_PROXY_ON_429", "1")
+    http = build_sources(["wikidata"], "ua", STOPWORDS, "pt-PT", 5)["wikidata"].http
+    assert http._proxy_on_429() is False
