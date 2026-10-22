@@ -41,7 +41,7 @@ Read the pages in this order. Each page links to the next one at its end.
 | [Decision models](decision-models.md) | The models, their licences, and the HTTP and in-process backends |
 | [Chat models](generators.md) | AMALIA, Claude, OpenAI, OpenRouter, OpenCode, Ollama and API keys |
 | [Documents](documents.md) | Formats, passages, persistence, hybrid retrieval and near-duplicates |
-| [Public sources](sources.md) | The fourteen public sources, their licences, and how they are searched |
+| [Public sources](sources.md) | The twenty-one public sources, their licences, and how they are searched |
 | [Agents](agents.md) | Connect Claude Desktop, Claude Code or OpenCode through MCP |
 | [Demo page](demo.md) | The web page that shows each gate decide |
 | [HTTP API](api.md) | Every endpoint, with request and response examples |

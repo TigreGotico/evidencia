@@ -14,11 +14,12 @@ from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from email.utils import parsedate_to_datetime
 from functools import cache, cached_property
 from html import unescape
 from importlib import resources
 from typing import Protocol
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urlencode, urljoin
 from zoneinfo import ZoneInfo
 
 import requests
@@ -79,6 +80,8 @@ class Document:
     text: str
     fmt: str = "text"
 
+# the text before the first word of a sentence: "", "Olá! ", "1. ", "Bom dia, " or "«"
+SENTENCE_START = re.compile(r"(?:^|[.!?:;,\n-])[\s¿¡\"'«(]*$")
 
 class RemoteSource:
     """A remote service that returns documents for a question.
@@ -147,8 +150,10 @@ class RemoteSource:
         found = []
         for match in NAME.finditer(question):
             words = match[0].split()
-            while words and words[0].lower() in self.stopwords:
-                words.pop(0)    # the capitalised first word of a question, such as "Quando"
+            # the capitalised first word of a sentence, such as "Quando"; inside a sentence "São" starts a name
+            if SENTENCE_START.search(question[:match.start()]):
+                while words and words[0].lower() in self.stopwords and fold(" ".join(words)) not in spelling:
+                    words.pop(0)
             if words:
                 found.append(" ".join(words))
         found = [spelling.get(fold(name), name) for name in found]
@@ -738,6 +743,14 @@ WIND = {"N": "norte", "NE": "nordeste", "E": "leste", "SE": "sudeste", "S": "sul
         "NW": "noroeste"}
 WEEKDAYS = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo")
 WARNING_LEVELS = {"yellow": "amarelo", "orange": "laranja", "red": "vermelho"}
+# the words of a question about earthquakes, the sea or the UV index, after fold()
+SEISMIC = re.compile(r"\b(?:sismos?|sismic[ao]s?|terramotos?|abalos?(?! financeir| politic| emociona)|tremor(?:es)? de terra)\b")
+SEA = re.compile(r"\b(?:mar|ondas?(?! de (?:calor|frio|choque))|ondulacao|agitacao maritima|surf)\b")
+UV = re.compile(r"\b(?:uv|ultravioleta)\b")
+SEISMIC_AREAS = {7: ("Portugal continental e Madeira", "em Portugal continental e na Madeira"), 3: ("Açores", "nos Açores")}
+MAX_QUAKES = 20     # quakes listed for one area
+UV_RISK = ((3, "baixo"), (6, "moderado"), (8, "elevado"), (11, "muito elevado"))   # WHO bands of the whole index; 11 and over is extremo
+NO_MAGNITUDE = -9     # IPMA gives -99 to a quake that has no magnitude
 
 
 class Ipma(RemoteSource):
@@ -747,7 +760,8 @@ class Ipma(RemoteSource):
     homepage = "https://www.ipma.pt"
     licence = "IPMA open data terms; IPMA asks each user to tell webmaster@ipma.pt what the data is used for"
     commercial = False
-    description = "Five-day forecasts and weather warnings for the district capitals and the islands."
+    description = ("Five-day forecasts and weather warnings for the district capitals and the islands; the "
+                   "earthquakes of the last 30 days; sea state on the coast; and the UV index.")
     api = "https://api.ipma.pt/open-data"
     pool = 2
     today = staticmethod(lambda: datetime.now(LISBON).date())
@@ -766,14 +780,101 @@ class Ipma(RemoteSource):
         return {int(c["classWindSpeed"]): c["descClassWindSpeedDailyPT"]
                 for c in self.get_json(f"{self.api}/wind-speed-daily-classe.json")["data"]}
 
+    @cached_property
+    def coast(self) -> dict[str, dict]:
+        """The places of the sea forecast, keyed by the folded name before the comma: "Faro, costa" is faro."""
+        return {fold(p["local"].split(",")[0]): p for p in self.get_json(f"{self.api}/sea-locations.json")}
+
     def fetch(self, question: str) -> list[Document]:
+        asked, names = fold(question), self.names(question)
         # the longest tail that is a place: "Vila do Porto" is not also Porto
-        named = [next((fold(t) for t in tails(name) if fold(t) in self.places), "") for name in self.names(question)]
+        named = [next((fold(t) for t in tails(name) if fold(t) in self.places), "") for name in names]
         places = list({key: self.places[key] for key in named if key}.values())[:self.pool]
-        if not places:
-            return []
-        warnings = self.get_json(f"{self.api}/forecast/warnings/warnings_www.json")
-        return [self.forecast(place, warnings) for place in places]
+        docs = []
+        if SEISMIC.search(asked):
+            # a question that names the Azores, or Madeira or the mainland, asks about the areas it names
+            areas = [area for area, pattern in ((7, r"\b(?:madeira|continente)\b"), (3, r"\bacores\b"))
+                     if re.search(pattern, asked)] or list(SEISMIC_AREAS)
+            docs += [doc for area in areas if (doc := self.earthquakes(area, names))]
+        if SEA.search(asked):
+            coast = [next((fold(t) for t in tails(name) if fold(t) in self.coast), "") for name in names]
+            if keys := [key for key in dict.fromkeys(coast) if key][:self.pool]:
+                days = [self.get_json(f"{self.api}/forecast/oceanography/daily/hp-daily-sea-forecast-day{day}.json")
+                        for day in range(3)]
+                docs += [self.sea(self.coast[key], days) for key in keys]
+        if UV.search(asked) and places:
+            docs += [doc for place in places if (doc := self.uv(place))]
+        if places:
+            warnings = self.get_json(f"{self.api}/forecast/warnings/warnings_www.json")
+            docs += [self.forecast(place, warnings) for place in places]
+        return docs
+
+    def earthquakes(self, area: int, names: list[str]) -> Document | None:
+        """The quakes of the last 30 days in one area: a count with the largest, then each quake that people felt,
+        that has magnitude 2.5 or more, or that is in a named place, the named ones first and then the newest."""
+        quakes = [q for q in self.get_json(f"{self.api}/observation/seismic/{area}.json")["data"]
+                  if q.get("time") and q.get("magnitud") and float(q["magnitud"]) > NO_MAGNITUDE]
+        if not quakes:
+            return None
+        title, where = SEISMIC_AREAS[area]
+        largest = max(quakes, key=lambda q: float(q["magnitud"]))
+        last = max(q["time"] for q in quakes)[:10]
+        lines = [f"Nos 30 dias até {last}, o IPMA registou {len(quakes)} sismo{'s' if len(quakes) > 1 else ''} "
+                 f"{where}. O maior teve magnitude {number(float(largest['magnitud']), 1)}, em {largest['time'][:10]}, "
+                 f"na região {' '.join(largest['obsRegion'].split())}."]
+        keys = [re.compile(rf"\b{re.escape(fold(t))}\b") for name in names for t in tails(name)]
+        def in_named(q):
+            # the region starts with a compass point, such as "SE Monchique"
+            region = re.sub(r"^[NSEW]{1,3}\s+", "", q["obsRegion"].strip())
+            return any(key.search(fold(f"{region} {q.get('local') or ''}")) for key in keys)
+        listed = [q for q in quakes if q.get("sensed") or float(q["magnitud"]) >= 2.5 or in_named(q)]
+        listed.sort(key=lambda q: q["time"], reverse=True)
+        listed.sort(key=lambda q: not in_named(q))
+        for q in listed[:MAX_QUAKES]:
+            near = f", perto de {q['local']}" if q.get("local") else ""
+            felt = f" Foi sentido, com intensidade {q['degree']}." if q.get("sensed") and q.get("degree") else \
+                " Foi sentido." if q.get("sensed") else ""
+            depth = f", a {q['depth']} km de profundidade" if q.get("depth") is not None else ""
+            lines.append(f"Sismo de magnitude {number(float(q['magnitud']), 1)} em {q['time'][:10]} às {q['time'][11:16]} "
+                         f"UTC, na região {' '.join(q['obsRegion'].split())}{near}{depth}.{felt}")
+        return Document(f"seismic-{area}", f"Sismos registados pelo IPMA: {title}",
+                        f"{self.api}/observation/seismic/{area}.json", "\n\n".join(lines))
+
+    def sea(self, place: dict, days: list[dict]) -> Document:
+        local, today = place["local"].split(",")[0], self.today()
+        lines = []
+        for forecast in days:
+            for p in forecast["data"]:
+                if p["globalIdLocal"] == place["globalIdLocal"]:
+                    when = self.label(date.fromisoformat(forecast["forecastDate"]), today)
+                    wave = WIND.get(p.get("predWaveDir"), p.get("predWaveDir") or "")
+                    def span(lo, hi):
+                        low, high = number(float(p[lo]), 1), number(float(p[hi]), 1)
+                        return low if low == high else f"{low} a {high}"
+                    lines.append(f"Estado do mar previsto pelo IPMA para {local}, {when}: ondulação de {wave} com "
+                                 f"{span('waveHighMin', 'waveHighMax')} m e período de {span('wavePeriodMin', 'wavePeriodMax')} s; "
+                                 f"altura total do mar de {span('totalSeaMin', 'totalSeaMax')} m; temperatura da água do "
+                                 f"mar de {span('sstMin', 'sstMax')} °C.")
+        head = f"O IPMA prevê o estado do mar para {local} nos próximos 3 dias."
+        return Document(f"sea-{place['globalIdLocal']}", f"Estado do mar previsto pelo IPMA para {local}",
+                        f"{self.api}/forecast/oceanography/daily/", "\n\n".join([head] + lines))
+
+    def uv(self, place: dict) -> Document | None:
+        local, today = place["local"], self.today()
+        days = sorted((u["data"], float(u["iUv"])) for u in self.get_json(f"{self.api}/forecast/meteorology/uv/uv.json")
+                      if u["globalIdLocal"] == place["globalIdLocal"])
+        if not days:
+            return None
+        lines = [f"Índice ultravioleta previsto pelo IPMA para {local}, {self.label(date.fromisoformat(day), today)}: "
+                 f"{number(index, 1)}, risco {next((risk for top, risk in UV_RISK if int(index + 0.5) < top), 'extremo')}."
+                 for day, index in days]
+        return Document(f"uv-{place['globalIdLocal']}", f"Índice ultravioleta previsto pelo IPMA para {local}",
+                        f"{self.api}/forecast/meteorology/uv/uv.json", "\n\n".join(lines))
+
+    def label(self, when: date, today: date) -> str:
+        """The weekday and the date, with hoje, amanhã or depois de amanhã when it is one of those."""
+        relative = {0: "hoje", 1: "amanhã", 2: "depois de amanhã"}.get((when - today).days)
+        return f"{WEEKDAYS[when.weekday()]}, {when.isoformat()}" + (f" ({relative})" if relative else "")
 
     def forecast(self, place: dict, warnings: list[dict]) -> Document:
         url = f"{self.api}/forecast/meteorology/cities/daily/{place['globalIdLocal']}.json"
@@ -791,9 +892,7 @@ class Ipma(RemoteSource):
         return Document(str(place["globalIdLocal"]), f"Previsão do IPMA para {local}", url, "\n\n".join(lines))
 
     def day(self, local: str, day: dict, today: date) -> str:
-        when = date.fromisoformat(day["forecastDate"])
-        relative = {0: "hoje", 1: "amanhã", 2: "depois de amanhã"}.get((when - today).days)
-        label = f"{WEEKDAYS[when.weekday()]}, {when.isoformat()}" + (f" ({relative})" if relative else "")
+        label = self.label(date.fromisoformat(day["forecastDate"]), today)
         sky = self.weather_types.get(day.get("idWeatherType"), "") if day.get("idWeatherType", -99) > 0 else ""
         facts = [sky[:1].lower() + sky[1:]]
         if "tMin" in day and "tMax" in day:
@@ -824,17 +923,96 @@ class DadosGov(RemoteSource):
         title = (dataset.get("title") or "").strip()
         if not title:
             return None
-        publisher = (dataset.get("organization") or {}).get("name") or "um publicador sem nome"
-        licence = dataset.get("license") or "notspecified"
-        licence = "não indicada" if licence in ("notspecified", "unknown") else licence
-        formats = sorted({r["format"].lower() for r in dataset.get("resources", []) if r.get("format")})
-        about = f"Conjunto de dados publicado por {publisher}. Licença: {licence}."
-        if formats:
-            about += f" Formatos: {', '.join(formats)}."
-        if updated := (dataset.get("last_update") or "")[:10]:
-            about += f" Última atualização: {updated}."
-        text = "\n\n".join(p for p in (about, plain(dataset.get("description") or "")) if p)
-        return Document(dataset["id"], title, dataset.get("page", ""), f"# {title}\n\n{text}", "markdown")
+        licence = dataset.get("license")
+        return Document(dataset["id"], title, dataset.get("page", ""), catalogue_entry(
+            title, (dataset.get("organization") or {}).get("name"), None if licence in ("notspecified", "unknown") else licence,
+            dataset.get("resources", []), dataset.get("last_update"), dataset.get("description")), "markdown")
+
+
+def catalogue_entry(title: str, publisher: str | None, licence: str | None, resources: list[dict], updated: str | None,
+                    description: str | None, extra: str = "") -> str:
+    """The passage of one dataset in a catalogue: who publishes it, its licence, formats and last update."""
+    about = f"Conjunto de dados publicado por {publisher or 'um publicador sem nome'}. Licença: {licence or 'não indicada'}."
+    if formats := sorted({r["format"].lower() for r in resources if r.get("format")}):
+        about += f" Formatos: {', '.join(formats)}."
+    if updated := (updated or "")[:10]:
+        about += f" Última atualização: {updated}."
+    about += extra
+    text = "\n\n".join(p for p in (about, plain(description or "")) if p)
+    return f"# {title}\n\n{text}"
+
+
+class Ckan(RemoteSource):
+    """A CKAN open data portal: the datasets that match the question, with publisher and licence."""
+    licence = "per dataset, given in each passage"
+    commercial = False
+    pool = 5
+
+    def fetch(self, question: str) -> list[Document]:
+        found = self.get_json(f"{self.homepage}/api/3/action/package_search", q=self.query(question), rows=self.pool)
+        return [self.document(p) for p in found["result"]["results"] if (p.get("title") or "").strip()]
+
+    def document(self, package: dict) -> Document:
+        title = package["title"].strip()
+        return Document(package["id"], title, f"{self.homepage}/dataset/{package['name']}", catalogue_entry(
+            title, (package.get("organization") or {}).get("title"), package.get("license_title"),
+            package.get("resources", []), package.get("metadata_modified"), package.get("notes")), "markdown")
+
+
+class CascaisDados(Ckan):
+    name = "dadosabertos.cascais.pt"
+    title = "Dados Abertos Cascais"
+    homepage = "https://dadosabertos.cascais.pt"
+    description = "Open datasets of the municipality of Cascais: what each holds, its licence and formats."
+
+
+class AguedaDados(Ckan):
+    name = "dadosabertos.cm-agueda.pt"
+    title = "Dados Abertos Águeda"
+    homepage = "https://dadosabertos.cm-agueda.pt"
+    description = "Open datasets of the municipality of Águeda: what each holds, its licence and formats."
+
+
+
+class PortoDados(Ckan):
+    name = "dadosabertos.cm-porto.pt"
+    title = "Dados Abertos Porto"
+    homepage = "https://dadosabertos.cm-porto.pt"
+    description = "Open datasets of the municipality of Porto: what each holds, its licence and formats."
+
+    def query(self, question: str) -> str:
+        # the free-text search of this portal finds no dataset, and a search by field works
+        return " OR ".join(f"{field}:{word}" for word in super().query(question).split() for field in ("title", "notes"))
+
+class Opendatasoft(RemoteSource):
+    """An Opendatasoft portal: the datasets that match the question, with publisher, licence and record count."""
+    licence = "per dataset, given in each passage"
+    commercial = False
+    pool = 5
+
+    def fetch(self, question: str) -> list[Document]:
+        query = self.query(question).replace('"', " ")
+        found = self.get_json(f"{self.homepage}/api/explore/v2.1/catalog/datasets", where=f'search("{query}")',
+                              limit=self.pool)
+        return [doc for dataset in found.get("results", []) if (doc := self.document(dataset))]
+
+    def document(self, dataset: dict) -> Document | None:
+        meta = (dataset.get("metas") or {}).get("default") or {}
+        if not (title := (meta.get("title") or "").strip()):
+            return None
+        count = meta.get("records_count")
+        extra = f" Tem {number(int(count))} registos." if count is not None else ""
+        return Document(dataset["dataset_id"], title, f"{self.homepage}/explore/dataset/{dataset['dataset_id']}/",
+                        catalogue_entry(title, meta.get("publisher"), meta.get("license"), [], meta.get("modified"),
+                                        meta.get("description"), extra), "markdown")
+
+
+class SnsTransparencia(Opendatasoft):
+    name = "transparencia.sns.gov.pt"
+    title = "SNS Transparência"
+    homepage = "https://transparencia.sns.gov.pt"
+    description = ("Datasets of the national health service: what each holds, such as emergency visits or waiting "
+                   "times, its publisher and its number of records. It does not give the numbers.")
 
 
 def nifs(question: str) -> list[str]:
@@ -1062,9 +1240,230 @@ class Dgeg(RemoteSource):
         return docs
 
 
+BUS = re.compile(r"\b(?:linhas?(?! de costa| do horizonte)|autocarros?|carreiras?(?! de tiro| profissiona)|carris|paragem|paragens)\b")   # after fold()
+# a line number, with the word before it; 2900-461 is a postal code
+LINE = re.compile(r"\b(?:(?:linhas?|carreiras?|autocarros?)\s+(?:(?:numero|n\.?\s*[oº]?)\s*)?)?(\d{4})\b(?!-\d{3}\b)")
+
+
+class CarrisMetropolitana(RemoteSource):
+    """The bus lines of the Lisbon metropolitan area, and the service alerts that have not ended."""
+    name = "carris-metropolitana"
+    title = "Carris Metropolitana"
+    homepage = "https://carrismetropolitana.pt"
+    licence = "Carris Metropolitana open data; no reuse licence named (Lei n.º 68/2021)"
+    commercial = False
+    description = ("Bus lines of the Lisbon metropolitan area outside the city of Lisbon: the route, the "
+                   "municipalities and localities each line serves, and the service alerts that have not ended.")
+    api = "https://api.carrismetropolitana.pt/v2"
+    pool = 3
+    max_bytes = 4_000_000       # the list of localities is 3 MB
+    max_listed = 60             # lines named for one place
+    now = staticmethod(time.time)
+
+    @cached_property
+    def lines(self) -> dict[str, dict]:
+        return {line["id"]: line for line in self.get_json(f"{self.api}/lines")}
+
+    @cached_property
+    def municipalities(self) -> dict[str, str]:
+        return {m["id"]: m["name"] for m in self.get_json(f"{self.api}/locations/municipalities")["data"]
+                if m.get("id") and m.get("name")}
+
+    @cached_property
+    def localities(self) -> dict[str, str]:
+        # the list holds a row with no id or name
+        return {loc["id"]: loc["name"] for loc in self.get_json(f"{self.api}/locations/localities")["data"]
+                if loc.get("id") and loc.get("name")}
+
+    def fetch(self, question: str) -> list[Document]:
+        asked = fold(question)
+        if not BUS.search(asked):
+            return []
+        alerts = [a for a in self.get_json(f"{self.api}/alerts")
+                  if any(period.get("end", 0) >= self.now() for period in a.get("active_period", []))]
+        # a number that looks like a year is a line only after the word linha: "em 2026" is a year
+        numbers = [m[1] for m in LINE.finditer(asked)
+                   if m[1] in self.lines and (m[0] != m[1] or not 1900 <= int(m[1]) <= 2099)][:self.pool]
+        docs = [self.line(self.lines[n], alerts) for n in numbers]
+        if not numbers:
+            docs += [doc for name in self.names(question)[:self.pool] if (doc := self.serving(name))]
+        return docs
+
+    def line(self, line: dict, alerts: list[dict]) -> Document:
+        towns = [self.municipalities[m] for m in line.get("municipality_ids", []) if m in self.municipalities]
+        places = [self.localities[loc] for loc in line.get("locality_ids", []) if loc in self.localities]
+        text = f"A linha {line['id']} da Carris Metropolitana faz o percurso {line['long_name']}."
+        if towns:
+            text += f" Serve {'o município de' if len(towns) == 1 else 'os municípios de'} {joined(towns)}"
+            text += f" e as localidades {joined(places)}." if places else "."
+        lines = [text]
+        for alert in alerts:
+            if any(e.get("route_id", "").split("]")[-1].split("_")[0] == line["id"] for e in alert.get("informed_entity", [])):
+                lines.append(f"Alerta da Carris Metropolitana para a linha {line['id']}, {self.period(alert)}: "
+                             f"{translated(alert, 'header_text').strip().rstrip('.')}. {translated(alert, 'description_text')}")
+        return Document(line["id"], f"Linha {line['id']} da Carris Metropolitana",
+                        f"{self.homepage}/lines/{line['id']}", "\n\n".join(lines))
+
+    def serving(self, name: str) -> Document | None:
+        """The lines that serve the first tail of the name that is a municipality or a locality. A municipality
+        comes first: Seixal is a municipality and also a village in Mafra."""
+        for tail in tails(name):
+            key = fold(tail)
+            towns = {i for i, n in self.municipalities.items() if fold(n) == key}
+            localities = {i for i, n in self.localities.items() if fold(n) == key}
+            found = [line for line in self.lines.values() if towns & set(line.get("municipality_ids", []))] or \
+                [line for line in self.lines.values() if localities & set(line.get("locality_ids", []))]
+            if found:
+                listed = ", ".join(f"{line['id']} ({line['long_name']})" for line in found[:self.max_listed])
+                return Document(f"serving-{key}", f"Linhas da Carris Metropolitana em {tail}", f"{self.homepage}/lines",
+                                f"As linhas da Carris Metropolitana que servem {tail} são: {listed}.")
+        return None
+
+    def period(self, alert: dict) -> str:
+        start, end = (datetime.fromtimestamp(alert["active_period"][0][k], LISBON).strftime("%Y-%m-%d %H:%M")
+                      for k in ("start", "end"))
+        return f"de {start} a {end}"
+
+
+JOB = re.compile(r"\b(?:ofertas? de (?:emprego|trabalho)"   # after fold()
+                 r"|vagas? (?:de|para)(?! (?:[ao] )?(?:calor|frio|estacionamento|estacionar|garagem|curso|universidade|escola|creche))"
+                 r"|procur\w* (?:de )?(?:trabalho|emprego)|(?<!centro de )(?<!centros de )(?<!taxa de )empregos?|iefp)\b")
+JOB_WORDS = {"oferta", "ofertas", "emprego", "empregos", "trabalho", "vaga", "vagas", "iefp", "procuro", "procura",
+             "arranjar", "encontrar", "municipio", "concelho"}
+
+
+class Iefp(RemoteSource):
+    """The job offers of the public employment service for the job and the municipality in the question."""
+    name = "iefp"
+    title = "IEFP - Ofertas de emprego"
+    homepage = "https://iefponline.iefp.pt"
+    licence = "IEFP terms; no reuse licence stated"
+    commercial = False
+    description = ("Job offers of the public employment service: job title, municipality, schedule, contract and "
+                   "required education, for the job and the municipality in the question.")
+    api = "https://iefponline.iefp.pt/IEFP/pesquisas"
+
+    def fetch(self, question: str) -> list[Document]:
+        if not JOB.search(fold(question)):
+            return []
+        spelling, _ = gazetteer()
+        town = next((spelling[fold(t)] for name in self.names(question) for t in tails(name) if fold(t) in spelling), "")
+        skip = JOB_WORDS | {fold(w) for w in self.stopwords} | {fold(w) for w in town.split()}
+        # the server reads ISO-8859-1, and a word it cannot read would empty the search
+        job = " ".join(w for w in self.terms(question) if fold(w) not in skip and w.encode("iso-8859-1", "ignore").decode("iso-8859-1") == w)
+        if not job and not town:
+            return []
+        params = {"cat": "ofertaEmprego"} | ({"text": job} if job else {}) | ({"concelho_facet": town.upper()} if town else {})
+        # the server reads the query in ISO-8859-1: ÉVORA in UTF-8 finds nothing
+        body = self.get(f"{self.api}/search.do?{urlencode(params, encoding='iso-8859-1')}")
+        try:
+            page = body.decode("utf-8")
+        except UnicodeDecodeError:    # the server sends ISO-8859-1 and names it only in the header
+            page = body.decode("cp1252", errors="replace")
+        offers = [doc for card in re.findall(r'(?s)<article class="card[^"]*card-oferta.*?</article>', page)
+                  if (doc := self.offer(card))]
+        if total := re.search(r'id="totalResultados">\s*(\d+)', page):
+            count = int(total[1])
+        elif "foram encontrados resultados" in unescape(page):
+            count = 0
+        else:
+            return offers
+        # the text search finds an offer with any of the words, so the count is the count of a search
+        found = f"oferta{'s' if count != 1 else ''} de emprego"
+        where = f" no município de {town}" if town else ""
+        if job and count:
+            head = f'A pesquisa do IEFP por "{job}" encontra {number(count)} {found}{where}.'
+        elif job:
+            head = f'A pesquisa do IEFP por "{job}" não encontra ofertas de emprego{where}.'
+        elif count:
+            head = f"O IEFP tem {number(count)} {found}{where}."
+        else:
+            head = f"O IEFP não tem ofertas de emprego{where}."
+        return [Document(f"total-{job}-{town}", "Ofertas de emprego do IEFP", f"{self.api}/search.do?cat=ofertaEmprego",
+                         head)] + offers
+
+    def offer(self, card: str) -> Document | None:
+        def field(label: str) -> str:
+            found = re.search(rf"(?s){label}\s*</div>\s*<div><strong>(.*?)</strong></div>", card)
+            return " ".join(unescape(re.sub(r"<[^>]+>", "", found[1])).split()) if found else ""
+        offer = re.search(r'id="ofertacard_(\d+)"', card)
+        title = re.search(r'(?s)min-height: 3rem;"><strong>(.*?)</strong>', card)
+        if not offer or not title:
+            return None
+        title = " ".join(unescape(title[1]).split())
+        place, _, schedule = field("Localização e Horário").partition("|")
+        place = " ".join(place.split())
+        spelling, _ = gazetteer()
+        place = spelling.get(fold(place), place.title())
+        contract = re.sub(r"\s*\((.*)\)", r", \1", field("Tipo de contrato")).lower()
+        form = field("Forma de prestação de trabalho").lower()
+        conditions = [" ".join(unescape(re.sub(r"<[^>]+>", "", li)).split()) for li in re.findall(r"(?s)<li>(.*?)</li>", card)]
+        text = f"Oferta de emprego do IEFP n.º {offer[1]}: {title}, em {place}"
+        text += f", horário {schedule.strip().lower()}." if schedule.strip() else "."
+        if contract:
+            text += f" Contrato {contract}."
+        if form:
+            text += f" Trabalho {form}."
+        for condition in conditions:
+            label, _, value = condition.partition(":")
+            text += f" {label}: {value.strip().lower()}." if value else f" {condition}."
+        return Document(offer[1], title, f"{self.api}/detalheOfertas2.do?idOferta={offer[1]}", text)
+
+
+class Rss(RemoteSource):
+    """An RSS 2.0 feed of headlines: each item is one passage with its section, its time and its link. The
+    retrieval ranks the items against the question."""
+    feed = ""
+    publisher = ""
+
+    def fetch(self, question: str) -> list[Document]:
+        root = ET.fromstring(self.get(self.feed))
+        docs = []
+        for item in root.iterfind("./channel/item"):
+            title = " ".join((item.findtext("title") or "").split())
+            link = (item.findtext("link") or "").strip()
+            if not title or not link:
+                continue
+            head = f"Notícia da {self.publisher}"
+            if section := " ".join((item.findtext("category") or "").split()):
+                head += f", secção {section}"
+            try:
+                stamp = parsedate_to_datetime((item.findtext("pubDate") or "").strip())
+            except (TypeError, ValueError):
+                stamp = None
+            if stamp:
+                # RFC 2822 "-0000" is a time in UTC with no known zone, and Python leaves it naive
+                stamp = stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+                head += f", de {stamp.astimezone(LISBON).strftime('%Y-%m-%d %H:%M')}"
+            docs.append(Document(link, title, link, f"{head}: {title.rstrip('.')}."))
+        return docs
+
+
+class RtpNoticias(Rss):
+    name = "rtp-noticias"
+    title = "RTP Notícias"
+    homepage = "https://www.rtp.pt/noticias"
+    licence = "RTP terms; headlines and links only, the article text is not used"
+    commercial = False
+    description = "The latest 50 news headlines of the public broadcaster, with section, time and link."
+    feed = "https://www.rtp.pt/noticias/rss"
+    publisher = "RTP"
+
+
+def joined(items: list[str]) -> str:
+    """"A", "A e B", "A, B e C"."""
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} e {items[-1]}"
+
+
+def translated(alert: dict, field: str) -> str:
+    texts = (alert.get(field) or {}).get("translation", [])
+    return next((t["text"] for t in texts if t.get("language") == "pt"), texts[0]["text"] if texts else "").strip()
+
+
 CATALOG: dict[str, type[RemoteSource]] = {cls.name: cls for cls in
                                           (Wikipedia, Wikisource, Wiktionary, Wikidata, DicionarioAberto, ArquivoPt,
-                                           GovPt, GeoApiPt, Ipma, DadosGov, Vies, Gleif, DnsPt, Dgeg)}
+                                           GovPt, GeoApiPt, Ipma, DadosGov, Vies, Gleif, DnsPt, Dgeg, CarrisMetropolitana, RtpNoticias,
+                                           CascaisDados, AguedaDados, PortoDados, SnsTransparencia, Iefp)}
 
 
 def build_sources(names: list[str], user_agent: str, stopwords: frozenset[str], lang: str, timeout: float,
