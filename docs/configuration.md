@@ -109,4 +109,4 @@ The `EVIDENCIA_GENERATOR_*` variables apply to the presets only. `EVIDENCIA_GENE
 `HF_HOME` sets where the decision model and the embedding model are stored.
 
 ---
-[← OpenAI compatibility](openai-compat.md) · [Home](index.md) · [Deployment →](deployment.md)
+[← Vendor APIs](vendor-apis.md) · [Home](index.md) · [Deployment →](deployment.md)

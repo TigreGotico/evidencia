@@ -102,8 +102,9 @@ No GPU? Use Claude or another hosted model instead of AMALIA: refer to [Chat mod
 | [Agents](docs/agents.md) | Connect Claude Desktop, Claude Code or OpenCode through MCP |
 | [Demo page](docs/demo.md) | The web page that shows each gate decide |
 | [HTTP API](docs/api.md) | Every endpoint, with request and response examples |
+| [Vendor APIs](docs/vendor-apis.md) | Chat through the OpenAI, Ollama, Anthropic and Gemini APIs, and the OpenAI vector-store search |
 | [Configuration](docs/configuration.md) | Every setting and environment variable |
-| [Deployment](docs/deployment.md) | Containers, AMALIA in compose, authentication and health checks |
+| [Deployment](docs/deployment.md) | Every deployment option, containers, OVOS personas, authentication and health checks |
 | [Python](docs/python.md) | Use evidencia as a library |
 | [Evaluation](docs/evaluation.md) | The pt-PT gate cases and the measurement scripts |
 | [Troubleshooting](docs/troubleshooting.md) | Each error message and its fix |

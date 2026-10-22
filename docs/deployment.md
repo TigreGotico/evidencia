@@ -4,6 +4,39 @@
 
 evidencia runs as one process. With `data_dir`, it keeps its collections in files. Run one instance for each `data_dir`, because two instances do not see each other's changes.
 
+## Deployment options
+
+Choose how evidencia runs, then how its clients reach it. The options in each table combine freely.
+
+How the service runs:
+
+| Option | Use it when | Refer to |
+| --- | --- | --- |
+| A local install, `evidencia serve` | You try evidencia, or run it on one machine | [Getting started](getting-started.md) |
+| The container image | You deploy on a server | [Container image](#container-image) |
+| Compose, with AMALIA and FlareSolverr | You want the chat model and the challenge solver next to evidencia | [Run with compose](#run-with-compose) |
+| A Python library, with no service | Your program calls evidencia in its own process | [Python](python.md) |
+
+Where its models and data live:
+
+| Part | Options | Refer to |
+| --- | --- | --- |
+| Decision model | In the process, on the CPU or a GPU (`local`), or on another server (`http`). One instance with a GPU can serve the model to the others | [Decision models](decision-models.md#one-instance-as-the-backend-of-another) |
+| Chat model | AMALIA on llama.cpp, Ollama, or a hosted provider | [Chat models](generators.md) |
+| Embeddings | None (BM25 only), the built-in model2vec model, or an embeddings plugin | [Documents](documents.md#retrieval) |
+| Vectors | In memory with files in `data_dir`, or a chromadb or qdrant database, on disk or on its own server | [Documents](documents.md#vector-databases) |
+
+How clients reach it:
+
+| Client | Path | Refer to |
+| --- | --- | --- |
+| A program, with HTTP and JSON | The evidencia HTTP API | [HTTP API](api.md) |
+| A person, in a browser | The demo page at `/` | [Demo page](demo.md) |
+| An agent: Claude Desktop, Claude Code, OpenCode | `evidencia mcp` | [Agents](agents.md) |
+| A client of OpenAI, Ollama, Anthropic, Gemini, Cohere, TGI or Bedrock | ovos-persona-server with the evidencia chat plugin | [Vendor APIs](vendor-apis.md#chat-through-ovos-persona-server) |
+| An OpenAI RAG tool | The OpenAI vector store search of evidencia | [Vendor APIs](vendor-apis.md#vector-store-search) |
+| An OVOS persona or voice assistant | The evidencia plugins | [OVOS personas](#ovos-personas) |
+
 ## Container image
 
 Build the image from the repository root:
@@ -81,6 +114,20 @@ podman run --rm --userns=keep-id -p 127.0.0.1:8080:8080 \
 The model must be in the host cache already. Without `--userns=keep-id`, the model cannot load. Then gate questions fail, and after the first one `/health` reports `degraded`.
 
 Without a configuration file, the image uses the defaults. The default decision backend is `http`, so set `EVIDENCIA_DECISION_BACKEND=local` or mount a configuration file. `host.containers.internal` is the name that Podman gives the host.
+
+## OVOS personas
+
+The `ovos-evidencia-plugin` package gives an OVOS persona three plugins. Each one calls an evidencia service over HTTP, so the persona needs no model of evidencia.
+
+| Plugin | Persona key | Does |
+| --- | --- | --- |
+| `ovos-evidencia-chat-plugin` | `handlers` | Answers with the gated answer. On an abstention it gives no answer, so the persona tries its next handler |
+| `ovos-evidencia-retrieval-plugin` | `handlers` | Returns the evidence passages, with their select probability. On an abstention it returns no passages |
+| `ovos-evidencia-memory-plugin` | `memory_module` | Adds the passages that pass the gates to the context of another chat engine. On an abstention it adds the `no_evidence` note, so the chat engine can say that it does not know. `inject_mode` places the evidence |
+
+The three plugins take the connection and question settings of the chat plugin in [Vendor APIs](vendor-apis.md#chat-through-ovos-persona-server). The chat and retrieval plugins answer only a question in the language of the evidencia service, so the persona must run in that language.
+
+ovos-persona-server serves such a persona to the vendor APIs. An OVOS voice assistant uses it as any other persona.
 
 ## Authentication
 

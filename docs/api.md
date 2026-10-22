@@ -22,8 +22,7 @@ When `api_key` is set, every `/v1` call must send the header `Authorization: Bea
 | `POST /v1/context` | Runs the select and sufficient gates and returns the evidence, without an answer |
 | `POST /v1/answer` | Runs the full loop and returns an answer or an abstention |
 | `POST /v1/answer/stream` | The same as `/v1/answer`, as server-sent events, one for each step |
-| `POST /v1/chat/completions` | The gated answer as an OpenAI chat completion. Refer to [OpenAI compatibility](openai-compat.md) |
-| `POST /v1/vector_stores/{collection}/search` | The selected passages as an OpenAI vector store search. Refer to [OpenAI compatibility](openai-compat.md) |
+| `POST /v1/vector_stores/{collection}/search` | The selected passages as an OpenAI vector store search. Refer to [Vendor APIs](vendor-apis.md) |
 | `POST /v1/check/grounding` | Checks an answer that you wrote |
 | `POST /v1/systemone` | Answers System One questions with this instance's decision model |
 | `GET /v1/models` | Names the model that `/v1/systemone` serves |
@@ -296,7 +295,7 @@ An error body is `{"detail": "<reason>"}`. Errors from the decision backend, the
 | --- | --- |
 | 401 | The bearer token is missing or wrong |
 | 403 | A URL was sent, and URL ingestion is off |
-| 404 | The collection or the document does not exist, or a chat completion names a model that is not `evidencia` |
+| 404 | The collection or the document does not exist |
 | 411 | The request body has no `Content-Length` |
 | 413 | The document is larger than `max_document_bytes`, or the request body is larger than 6 times `max_document_bytes` plus 64 KiB |
 | 422 | The request body is not valid; a threshold is below the server value and `allow_lower_thresholds` is off; a size is above its `max_request_*` limit; it names no collection and no source; it names a source that is not enabled, or a collection with the name of a requested source; a document has no text; a file has an unknown format, is not UTF-8 or is not a readable PDF; a URL redirects or its text does not decode; or the decision model refused the request |
@@ -315,4 +314,4 @@ An error body is `{"detail": "<reason>"}`. Errors from the decision backend, the
 | `could not fetch the URL` | URL ingestion failed |
 
 ---
-[← Demo page](demo.md) · [Home](index.md) · [OpenAI compatibility →](openai-compat.md)
+[← Demo page](demo.md) · [Home](index.md) · [Vendor APIs →](vendor-apis.md)
