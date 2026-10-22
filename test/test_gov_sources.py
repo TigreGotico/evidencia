@@ -1,8 +1,10 @@
 from datetime import date
 
 import pytest
+import requests
+from urllib.parse import quote, quote_plus
 
-from evidencia.sources import (DadosGov, Dgeg, DnsPt, GeoApiPt, Gleif, GovPt, Ipma, SourceUnavailable, Vies, number,
+from evidencia.sources import (CarrisMetropolitana, CascaisDados, DadosGov, Iefp, PortoDados, RtpNoticias, SnsTransparencia, Dgeg, DnsPt, GeoApiPt, Gleif, GovPt, Ipma, SourceUnavailable, Vies, number,
                                plain, tails, valid_nif)
 from test_sources import STOPWORDS, FakeHttp, FakeResponse
 
@@ -531,3 +533,493 @@ def test_a_capitalised_place_keeps_its_lowercase_joining_words():
     source = GeoApiPt(FakeHttp(geo_route), STOPWORDS)
     assert source.names("Quantos habitantes tem Arruda dos Vinhos?") == ["Arruda dos Vinhos"]
     assert source.names("quantos habitantes tem arruda dos vinhos") == ["Arruda dos Vinhos"]
+
+
+def quake(time, mag, region, local=None, sensed=None, degree=None, depth=10):
+    return {"time": time, "magnitud": mag, "magType": "L", "obsRegion": region, "local": local, "sensed": sensed,
+            "degree": degree, "depth": depth}
+
+
+def ipma_topics_route(url, params):
+    if url.endswith("/observation/seismic/7.json"):
+        return {"data": [quake("2026-10-15T20:34:46", "4.2", "NE Bragança", "Vinhais (Bragança)", True, "III", 16),
+                         quake("2026-10-20T03:00:00", "1.1", "W  Monchique"),
+                         quake("2026-10-21T10:00:00", "2.6", "SW Sagres")]}
+    if url.endswith("/observation/seismic/3.json"):
+        return {"data": [quake("2026-10-20T18:07:19", "3.1", "Fossa de Hirondelle")]}
+    if url.endswith("/sea-locations.json"):
+        return [{"local": "Faro, costa", "globalIdLocal": 1080526}, {"local": "Lisboa, costa", "globalIdLocal": 1110526}]
+    if "hp-daily-sea-forecast-day" in url:
+        day = int(url[-6])
+        return {"forecastDate": f"2026-10-{21 + day}", "data": [
+            {"globalIdLocal": 1080526, "predWaveDir": "SW", "waveHighMin": "0.8", "waveHighMax": "1.0",
+             "wavePeriodMin": "4.6", "wavePeriodMax": "6.7", "totalSeaMin": 1.0, "totalSeaMax": 1.5,
+             "sstMin": "21.1", "sstMax": "21.9"}]}
+    if url.endswith("/uv/uv.json"):
+        return [{"globalIdLocal": 1110600, "data": "2026-10-21", "iUv": "2.7", "idPeriodo": 10},
+                {"globalIdLocal": 1110600, "data": "2026-10-22", "iUv": "6.4", "idPeriodo": 10},
+                {"globalIdLocal": 1160900, "data": "2026-10-22", "iUv": "1.0", "idPeriodo": 10}]
+    return ipma_route(url, params)
+
+
+def test_ipma_lists_the_earthquakes_of_the_last_days_with_the_ones_in_the_named_place_first():
+    source = Ipma(FakeHttp(ipma_topics_route), STOPWORDS)
+    docs = {d.title: d for d in source.fetch("houve algum sismo em braganca?")}
+    mainland = docs["Sismos registados pelo IPMA: Portugal continental e Madeira"].text.split("\n\n")
+    assert mainland == [
+        "Nos 30 dias até 2026-10-21, o IPMA registou 3 sismos em Portugal continental e na Madeira. O maior teve "
+        "magnitude 4,2, em 2026-10-15, na região NE Bragança.",
+        "Sismo de magnitude 4,2 em 2026-10-15 às 20:34 UTC, na região NE Bragança, perto de Vinhais (Bragança), a 16 km "
+        "de profundidade. Foi sentido, com intensidade III.",
+        "Sismo de magnitude 2,6 em 2026-10-21 às 10:00 UTC, na região SW Sagres, a 10 km de profundidade."]
+    assert docs["Sismos registados pelo IPMA: Açores"].text.startswith(
+        "Nos 30 dias até 2026-10-20, o IPMA registou 1 sismo nos Açores.")
+
+
+def test_ipma_gives_the_sea_state_of_a_coastal_place():
+    source = Ipma(FakeHttp(ipma_topics_route), STOPWORDS)
+    source.today = lambda: date(2026, 10, 21)
+    docs = [d for d in source.fetch("como esta o mar em faro amanha?") if d.title.startswith("Estado do mar")]
+    assert docs[0].title == "Estado do mar previsto pelo IPMA para Faro"
+    assert docs[0].text.split("\n\n")[2] == (
+        "Estado do mar previsto pelo IPMA para Faro, quinta-feira, 2026-10-22 (amanhã): ondulação de sudoeste com "
+        "0,8 a 1,0 m e período de 4,6 a 6,7 s; altura total do mar de 1,0 a 1,5 m; temperatura da água do mar de "
+        "21,1 a 21,9 °C.")
+
+
+def test_ipma_gives_the_uv_index_with_its_risk_level():
+    source = Ipma(FakeHttp(ipma_topics_route), STOPWORDS)
+    source.today = lambda: date(2026, 10, 21)
+    docs = [d for d in source.fetch("qual e o indice uv em lisboa?") if d.title.startswith("Índice ultravioleta")]
+    assert docs[0].text.split("\n\n") == [
+        "Índice ultravioleta previsto pelo IPMA para Lisboa, quarta-feira, 2026-10-21 (hoje): 2,7, risco moderado.",
+        "Índice ultravioleta previsto pelo IPMA para Lisboa, quinta-feira, 2026-10-22 (amanhã): 6,4, risco elevado."]
+
+
+def test_ipma_asks_for_earthquakes_sea_or_uv_only_when_the_question_does():
+    http = FakeHttp(ipma_topics_route)
+    source = Ipma(http, STOPWORDS)
+    source.today = lambda: date(2026, 10, 21)
+    source.fetch("vai chover em lisboa?")
+    assert not [url for url, _ in http.calls if "seismic" in url or "sea" in url or "uv" in url]
+
+
+def test_ipma_gives_the_earthquakes_of_the_azores_only_when_the_question_names_them():
+    source = Ipma(FakeHttp(ipma_topics_route), STOPWORDS)
+    assert [d.title for d in source.fetch("Houve sismos nos Açores?")] == ["Sismos registados pelo IPMA: Açores"]
+    assert [d.title for d in source.fetch("houve sismos na madeira?")] == [
+        "Sismos registados pelo IPMA: Portugal continental e Madeira"]
+
+
+def test_ipma_states_a_range_with_equal_ends_as_one_value():
+    def route(url, params):
+        if "hp-daily-sea-forecast-day" in url:
+            return {"forecastDate": "2026-10-21", "data": [
+                {"globalIdLocal": 1080526, "predWaveDir": "W", "waveHighMin": "0.5", "waveHighMax": "0.5",
+                 "wavePeriodMin": "4.6", "wavePeriodMax": "6.7", "totalSeaMin": 0.5, "totalSeaMax": 0.5,
+                 "sstMin": "21.1", "sstMax": "21.9"}]}
+        return ipma_topics_route(url, params)
+    source = Ipma(FakeHttp(route), STOPWORDS)
+    source.today = lambda: date(2026, 10, 21)
+    text = source.fetch("como esta o mar em faro?")[0].text
+    assert "ondulação de oeste com 0,5 m e período de 4,6 a 6,7 s; altura total do mar de 0,5 m;" in text
+
+
+CM = "https://api.carrismetropolitana.pt"
+CM_LINES = [{"id": "3210", "long_name": "Sesimbra (Terminal) - Zambujal", "municipality_ids": ["1511"],
+             "locality_ids": ["100001", "100002"]},
+            {"id": "4600", "long_name": "Barreiro (Terminal) - Moita", "municipality_ids": ["1504", "1506"],
+             "locality_ids": ["100003"]}]
+CM_ALERT = {"active_period": [{"start": 1792654200, "end": 1792670400}], "effect": "DETOUR",
+            "header_text": {"translation": [{"language": "pt", "text": "Sesimbra | 3210: Desvio de percurso "}]},
+            "description_text": {"translation": [{"language": "pt", "text": "A linha 3210 terá um desvio."}]},
+            "informed_entity": [{"route_id": "[YA15B]3210_0", "stop_id": "150327"}]}
+CM_OLD = {**CM_ALERT, "active_period": [{"start": 1700000000, "end": 1700003600}],
+          "header_text": {"translation": [{"language": "pt", "text": "Sesimbra | 3210: Obras antigas"}]}}
+
+
+def cm_route(url, params):
+    return {f"{CM}/v2/lines": CM_LINES, f"{CM}/v2/alerts": [CM_ALERT, CM_OLD],
+            f"{CM}/v2/locations/municipalities": {"data": [{"id": "1511", "name": "Sesimbra"}, {"id": "1504", "name": "Barreiro"},
+                                                           {"id": "1506", "name": "Moita"}]},
+            f"{CM}/v2/locations/localities": {"data": [{"id": "100001", "name": "Sesimbra"}, {"id": "100002", "name": "Zambujal"},
+                                                        {"id": "100003", "name": "Alhos Vedros"}]}}[url]
+
+
+def test_carris_metropolitana_describes_a_line_with_its_current_alerts():
+    source = CarrisMetropolitana(FakeHttp(cm_route), STOPWORDS)
+    source.now = lambda: 1792600000
+    docs = source.fetch("ha alguma perturbacao na linha 3210?")
+    assert docs[0].title == "Linha 3210 da Carris Metropolitana"
+    assert docs[0].text.split("\n\n") == [
+        "A linha 3210 da Carris Metropolitana faz o percurso Sesimbra (Terminal) - Zambujal. Serve o município de "
+        "Sesimbra e as localidades Sesimbra e Zambujal.",
+        "Alerta da Carris Metropolitana para a linha 3210, de 2026-10-22 08:30 a 2026-10-22 13:00: Sesimbra | 3210: "
+        "Desvio de percurso. A linha 3210 terá um desvio."]
+
+
+def test_carris_metropolitana_names_the_lines_that_serve_a_place():
+    source = CarrisMetropolitana(FakeHttp(cm_route), STOPWORDS)
+    source.now = lambda: 1792600000
+    docs = source.fetch("Que autocarros passam em Alhos Vedros?")
+    assert [d.text for d in docs] == [
+        "As linhas da Carris Metropolitana que servem Alhos Vedros são: 4600 (Barreiro (Terminal) - Moita)."]
+
+
+def test_carris_metropolitana_answers_only_a_question_about_buses():
+    http = FakeHttp(cm_route)
+    assert CarrisMetropolitana(http, STOPWORDS).fetch("Quantos habitantes tem Sesimbra em 2021?") == []
+    assert http.calls == []
+
+
+def test_carris_metropolitana_skips_a_location_row_without_an_id():
+    def route(url, params):
+        reply = cm_route(url, params)
+        return {"data": reply["data"] + [{"display": ""}]} if url.endswith("/localities") else reply
+    source = CarrisMetropolitana(FakeHttp(route), STOPWORDS)
+    source.now = lambda: 1792600000
+    assert source.fetch("Que autocarros passam em Alhos Vedros?")[0].title == "Linhas da Carris Metropolitana em Alhos Vedros"
+
+
+def test_carris_metropolitana_reads_a_municipality_name_as_the_municipality_not_a_village_of_that_name():
+    def route(url, params):
+        reply = cm_route(url, params)
+        if url.endswith("/localities"):
+            return {"data": reply["data"] + [{"id": "100004", "name": "Moita"}]}
+        if url.endswith("/lines"):
+            return [{**CM_LINES[0], "locality_ids": CM_LINES[0]["locality_ids"] + ["100004"]}, CM_LINES[1]]
+        return reply
+    source = CarrisMetropolitana(FakeHttp(route), STOPWORDS)
+    source.now = lambda: 1792600000
+    assert source.fetch("Que linhas passam na Moita?")[0].text == (
+        "As linhas da Carris Metropolitana que servem Moita são: 4600 (Barreiro (Terminal) - Moita).")
+
+
+RSS = b"""<?xml version="1.0"?><rss version="2.0"><channel><title>RTP</title>
+<item><title>Tribunal Penal Internacional vence o  Pr\xc3\xa9mio Sakharov</title>
+<link>https://www.rtp.pt/noticias/mundo/sakharov_n1</link><category>Mundo</category>
+<description> &lt;img src="x.png"/&gt; </description><pubDate>Thu, 22 Oct 2026 13:29:03 +0100</pubDate></item>
+<item><title>  </title><link>https://www.rtp.pt/x</link></item>
+<item><title>Greve nos comboios na sexta-feira</title><link>https://www.rtp.pt/noticias/pais/greve_n2</link>
+<category>Pa\xc3\xads</category><pubDate>Wed, 21 Oct 2026 23:10:00 +0000</pubDate></item>
+</channel></rss>"""
+
+
+def test_rtp_gives_each_headline_with_its_section_its_time_and_its_link():
+    docs = RtpNoticias(FakeHttp(lambda url, params: RSS), STOPWORDS).fetch("Quem ganhou o Prémio Sakharov?")
+    assert [(d.title, d.url, d.text) for d in docs] == [
+        ("Tribunal Penal Internacional vence o Prémio Sakharov", "https://www.rtp.pt/noticias/mundo/sakharov_n1",
+         "Notícia da RTP, secção Mundo, de 2026-10-22 13:29: Tribunal Penal Internacional vence o Prémio Sakharov."),
+        ("Greve nos comboios na sexta-feira", "https://www.rtp.pt/noticias/pais/greve_n2",
+         "Notícia da RTP, secção País, de 2026-10-22 00:10: Greve nos comboios na sexta-feira.")]
+
+
+def test_rss_states_a_headline_without_a_section_or_a_time():
+    feed = b"<rss><channel><item><title>Sem data</title><link>https://www.rtp.pt/a</link></item></channel></rss>"
+    assert [d.text for d in RtpNoticias(FakeHttp(lambda url, params: feed), STOPWORDS).fetch("x")] == [
+        "Notícia da RTP: Sem data."]
+
+
+def test_a_ckan_portal_names_each_dataset_with_publisher_licence_and_formats():
+    package = {"id": "p1", "name": "geocascais-estacionamento", "title": "Estacionamento", "license_title": "Creative Commons - Atribuição",
+               "metadata_modified": "2026-10-21T17:27:06.107221", "notes": "Dados geográficos de estacionamentos.\r\n\r\nFonte: GeoCascais",
+               "organization": {"title": "Câmara Municipal de Cascais"}, "resources": [{"format": "GeoJSON"}, {"format": "CSV"}]}
+    http = FakeHttp(lambda url, params: {"success": True, "result": {"results": [package]}})
+    docs = CascaisDados(http, STOPWORDS).fetch("Onde há estacionamento em Cascais?")
+    assert http.calls[0] == ("https://dadosabertos.cascais.pt/api/3/action/package_search",
+                             {"q": "estacionamento cascais", "rows": 5})
+    assert (docs[0].url, docs[0].text) == (
+        "https://dadosabertos.cascais.pt/dataset/geocascais-estacionamento",
+        "# Estacionamento\n\nConjunto de dados publicado por Câmara Municipal de Cascais. Licença: Creative Commons - "
+        "Atribuição. Formatos: csv, geojson. Última atualização: 2026-10-21.\n\nDados geográficos de estacionamentos.\n\n"
+        "Fonte: GeoCascais")
+
+
+
+def test_porto_searches_each_word_in_the_title_and_the_description():
+    """The free-text search of the Porto portal finds nothing, and a search by field works."""
+    http = FakeHttp(lambda url, params: {"success": True, "result": {"results": []}})
+    assert PortoDados(http, STOPWORDS).fetch("Onde há estacionamento no Porto?") == []
+    assert http.calls == [("https://dadosabertos.cm-porto.pt/api/3/action/package_search",
+                           {"q": "title:estacionamento OR notes:estacionamento OR title:porto OR notes:porto", "rows": 5})]
+
+def test_an_opendatasoft_portal_names_each_dataset_with_its_record_count():
+    dataset = {"dataset_id": "monitorizacao-sazonal-csh", "metas": {"default": {
+        "title": "Atividade nos Cuidados Saúde Hospitalares", "description": "<p>Episódios de <b>urgência</b>.</p>",
+        "license": None, "modified": "2019-01-21T09:33:16+00:00", "publisher": "DE-SNS", "records_count": 85715}}}
+    http = FakeHttp(lambda url, params: {"results": [dataset]})
+    docs = SnsTransparencia(http, STOPWORDS).fetch("Quantas urgências houve nos hospitais?")
+    assert http.calls[0] == ("https://transparencia.sns.gov.pt/api/explore/v2.1/catalog/datasets",
+                             {"where": 'search("urgências hospitais")', "limit": 5})
+    assert (docs[0].url, docs[0].text) == (
+        "https://transparencia.sns.gov.pt/explore/dataset/monitorizacao-sazonal-csh/",
+        "# Atividade nos Cuidados Saúde Hospitalares\n\nConjunto de dados publicado por DE-SNS. Licença: não indicada. "
+        "Última atualização: 2019-01-21. Tem 85 715 registos.\n\nEpisódios de urgência.")
+
+
+def iefp_card(offer, title, place, schedule, contract, form, education):
+    return f"""<article class="card card-oferta flex-fill mb-3 " id="ofertacard_{offer}">
+ <div class="card-header"><div class="row-flex"><div class="col-xs-6">Oferta de Emprego</div>
+ <div class="col-xs-6 text-right">ID: {offer}
+ </div></div>
+ <div class="d-flex align-items-center" style="min-height: 3rem;"><strong>{title}</strong></div></div>
+ <div class="card-body small flex-fill"><div class="row-flex mb-3"><div class="col-xs-12 col-sm-6">
+ <div class="text-uppercase"><i class="fa fa-map-marker"></i>Localização e Horário</div>
+ <div><strong>
+ {place}
+ | <span class="text-capitalize">{schedule}</span>
+ </strong></div></div>
+ <div class="col-xs-12 col-sm-6"><div class="text-uppercase"><i class="fa fa-file-text-o"></i>Tipo de contrato </div>
+ <div><strong>
+ <span class="text-capitalize">{contract}</span>
+ (<span class="text-capitalize">A tempo completo</span>)
+ </strong></div></div></div>
+ <div class="row-flex mb-3"><div class="col-xs-12 col-sm-6">
+ <div class="text-uppercase"><i class="fa fa-briefcase"></i>Forma de prestação de trabalho</div>
+ <div><strong>{form}</strong></div></div></div>
+ <hr class="hr-dark" /><div><div class="text-uppercase mb-2"><strong>Condições de Acesso</strong></div>
+ <ul class="list-unstyled"><li>Habilitação:
+ <span class="text-lowercase">
+ {education}
+ </span></li></ul></div></div>
+ <div class="card-footer"><a class="btn" href="IEFP/pesquisas/detalheOfertas2.do?idOferta={offer}&posAbs=2&nav=true">Mais Detalhes</a></div>
+ </article>"""
+
+
+IEFP = "https://iefponline.iefp.pt/IEFP/pesquisas/search.do"
+IEFP_PAGE = ('<div class="h4">1 - 2 resultado(s) listado(s) de <span id="totalResultados">4</span></div>'
+             + iefp_card("589453805", "Cozinheiro", "SINTRA", "Diurno", "Termo certo", "Presencial", "Igual ou superior ao 4.º ano")
+             + iefp_card("589400001", "Ajudante de Cozinha", "SÃO BRÁS DE ALPORTEL", "a combinar", "Sem termo", "Presencial",
+                         "Igual ou superior ao 6.º ano"))
+
+
+# the server sends ISO-8859-1 with no charset in the page; a page that FlareSolverr solved comes back in UTF-8
+@pytest.mark.parametrize("encoding", ["iso-8859-1", "utf-8"])
+def test_iefp_searches_the_job_in_the_named_municipality_and_states_each_offer(encoding):
+    http = FakeHttp(lambda url, params: IEFP_PAGE.encode(encoding))
+    docs = Iefp(http, STOPWORDS).fetch("há ofertas de emprego para cozinheiro em sintra?")
+    assert http.calls == [(f"{IEFP}?cat=ofertaEmprego&text=cozinheiro&concelho_facet=SINTRA", {})]
+    assert [d.text for d in docs] == [
+        'A pesquisa do IEFP por "cozinheiro" encontra 4 ofertas de emprego no município de Sintra.',
+        "Oferta de emprego do IEFP n.º 589453805: Cozinheiro, em Sintra, horário diurno. Contrato termo certo, a tempo "
+        "completo. Trabalho presencial. Habilitação: igual ou superior ao 4.º ano.",
+        "Oferta de emprego do IEFP n.º 589400001: Ajudante de Cozinha, em São Brás de Alportel, horário a combinar. "
+        "Contrato sem termo, a tempo completo. Trabalho presencial. Habilitação: igual ou superior ao 6.º ano."]
+    assert docs[1].url == "https://iefponline.iefp.pt/IEFP/pesquisas/detalheOfertas2.do?idOferta=589453805"
+
+
+def test_iefp_answers_only_a_question_about_job_offers():
+    http = FakeHttp(lambda url, params: IEFP_PAGE.encode())
+    assert Iefp(http, STOPWORDS).fetch("Qual é o código do trabalho em Sintra?") == []
+    assert http.calls == []
+
+
+def test_iefp_states_that_there_is_no_offer_for_the_job_in_the_municipality():
+    http = FakeHttp(lambda url, params: '<div class="h4">N&atilde;o foram encontrados resultados.</div>'.encode("iso-8859-1"))
+    docs = Iefp(http, STOPWORDS).fetch("ha vagas de emprego para astronauta em evora")
+    assert http.calls == [(f"{IEFP}?cat=ofertaEmprego&text=astronauta&concelho_facet=%C9VORA", {})]
+    assert [d.text for d in docs] == ['A pesquisa do IEFP por "astronauta" não encontra ofertas de emprego no município de Évora.']
+
+
+def test_iefp_lists_the_offers_of_a_municipality_when_the_question_names_no_job():
+    http = FakeHttp(lambda url, params: IEFP_PAGE.encode("iso-8859-1"))
+    docs = Iefp(http, STOPWORDS).fetch("ha vagas de emprego em evora")
+    assert http.calls == [(f"{IEFP}?cat=ofertaEmprego&concelho_facet=%C9VORA", {})]
+    assert docs[0].text == "O IEFP tem 4 ofertas de emprego no município de Évora."
+
+
+def test_iefp_asks_nothing_without_a_job_or_a_municipality():
+    http = FakeHttp(lambda url, params: IEFP_PAGE.encode())
+    assert Iefp(http, STOPWORDS).fetch("ha ofertas de emprego?") == []
+    assert http.calls == []
+
+
+class Capture(requests.adapters.BaseAdapter):
+    """Keeps the URL of each request as it goes on the wire, and sends nothing."""
+    def __init__(self):
+        super().__init__()
+        self.urls = []
+
+    def send(self, request, **kwargs):
+        self.urls.append(request.url)
+        raise requests.ConnectionError("captured")
+
+    def close(self):
+        pass
+
+
+def test_iefp_sends_the_query_in_the_charset_of_the_server():
+    # the server reads the query in ISO-8859-1: ÉVORA as %C9VORA finds 13 cooks, as %C3%89VORA none
+    session, capture = requests.Session(), Capture()
+    session.mount("https://", capture)
+    with pytest.raises(requests.ConnectionError):
+        Iefp(session, STOPWORDS).fetch("Há ofertas de emprego para mecânico em Évora?")
+    assert capture.urls == [f"{IEFP}?cat=ofertaEmprego&text={quote('mecânico'.encode('iso-8859-1'))}"
+                            f"&concelho_facet={quote('ÉVORA'.encode('iso-8859-1'))}"]
+
+
+@pytest.mark.parametrize("question", ["Vai haver uma vaga de calor em Évora?", "Há vagas de estacionamento em Faro?",
+                                      "Há vagas para estacionar em Faro?", "Há vagas para o curso de medicina em Coimbra?",
+                                      "Qual o horário do centro de emprego de Évora?", "Qual é a taxa de emprego em Portugal?",
+                                      "Há ofertas para telemóveis em Lisboa?"])
+def test_iefp_ignores_a_vaga_that_is_not_a_job(question):
+    http = FakeHttp(lambda url, params: IEFP_PAGE.encode())
+    assert Iefp(http, STOPWORDS).fetch(question) == []
+    assert http.calls == []
+
+
+def ipma_quakes(data):
+    def route(url, params):
+        if url.endswith("/observation/seismic/7.json"):
+            return {"data": data}
+        return ipma_topics_route(url, params)
+    return route
+
+
+def test_ipma_never_states_the_no_magnitude_value_and_does_not_count_it():
+    # IPMA gives magnitud "-99.0" to a quake with no magnitude
+    source = Ipma(FakeHttp(ipma_quakes([quake("2026-10-11T16:19:00", "-99.0", "N  Arraiolos"),
+                                        quake("2026-10-12T10:00:00", "1.0", "E  Arraiolos")])), STOPWORDS)
+    text = next(d for d in source.fetch("Houve sismos em Arraiolos?") if d.key == "seismic-7").text
+    assert "-99" not in text and "registou 1 sismo " in text
+
+
+@pytest.mark.parametrize("question, region", [("Houve sismos em Mira?", "W  Odemira"), ("Houve sismos na Sé?", "SE Monchique")])
+def test_ipma_lists_a_small_quake_only_when_its_region_holds_the_whole_name(question, region):
+    source = Ipma(FakeHttp(ipma_quakes([quake("2026-10-08T03:43:00", "0.4", region),
+                                        quake("2026-10-12T10:00:00", "3.0", "SW Sagres")])), STOPWORDS)
+    text = next(d for d in source.fetch(question) if d.key == "seismic-7").text
+    assert "magnitude 0,4" not in text and "Sismo de magnitude 3,0" in text
+
+
+def test_ipma_lists_a_small_quake_in_the_named_place():
+    source = Ipma(FakeHttp(ipma_quakes([quake("2026-10-08T03:43:00", "0.4", "W  Odemira")])), STOPWORDS)
+    assert "Sismo de magnitude 0,4" in source.fetch("Houve sismos em Odemira?")[0].text
+
+
+def test_ipma_a_question_about_madeira_and_the_azores_gets_both_areas():
+    source = Ipma(FakeHttp(ipma_topics_route), STOPWORDS)
+    assert {d.key for d in source.fetch("Houve sismos na Madeira e nos Açores?")} == {"seismic-7", "seismic-3"}
+
+
+def test_ipma_reads_the_sea_forecast_once_for_all_the_named_places():
+    http = FakeHttp(ipma_topics_route)
+    source = Ipma(http, STOPWORDS)
+    source.today = lambda: date(2026, 10, 21)
+    source.fetch("Como está o mar em Faro e em Lisboa?")
+    assert len([url for url, _ in http.calls if "hp-daily-sea-forecast-day" in url]) == 3
+
+
+@pytest.mark.parametrize("question", ["Vai haver ondas de calor em Faro?", "Houve abalos financeiros em Faro?"])
+def test_ipma_ignores_a_phrase_that_is_not_about_the_sea_or_quakes(question):
+    http = FakeHttp(ipma_topics_route)
+    Ipma(http, STOPWORDS).fetch(question)
+    assert not [url for url, _ in http.calls if "seismic" in url or "sea" in url]
+
+
+def test_carris_answers_a_question_with_the_word_paragem():
+    http = FakeHttp(cm_route)
+    CarrisMetropolitana(http, STOPWORDS).fetch("Qual é a paragem mais perto de Alhos Vedros?")
+    assert http.calls
+
+
+@pytest.mark.parametrize("question", ["Onde fica a carreira de tiro de Almada?", "Qual é a linha de costa da Moita?"])
+def test_carris_ignores_a_linha_or_carreira_that_is_not_a_bus(question):
+    http = FakeHttp(cm_route)
+    assert CarrisMetropolitana(http, STOPWORDS).fetch(question) == []
+    assert http.calls == []
+
+
+def test_carris_reads_a_year_as_a_year_and_a_line_after_the_word_linha():
+    year_line = {"id": "2026", "long_name": "Loures | Circular", "municipality_ids": ["1107"], "locality_ids": []}
+    def route(url, params):
+        return [*CM_LINES, year_line] if url.endswith("/v2/lines") else cm_route(url, params)
+    source = CarrisMetropolitana(FakeHttp(route), STOPWORDS)
+    source.now = lambda: 1792600000
+    assert [d.title for d in source.fetch("Que autocarros passam na Moita em 2026?")] == [
+        "Linhas da Carris Metropolitana em Moita"]
+    assert [d.title for d in source.fetch("Há perturbações na linha 2026?")] == ["Linha 2026 da Carris Metropolitana"]
+
+
+def test_rss_keeps_a_headline_with_a_date_it_cannot_read_and_reads_minus_zero_as_utc():
+    feed = ("<rss><channel><item><title>Data errada</title><link>https://www.rtp.pt/a</link><pubDate>ontem</pubDate></item>"
+            "<item><title>Sem zona</title><link>https://www.rtp.pt/b</link><pubDate>Wed, 21 Oct 2026 23:10:00 -0000</pubDate>"
+            "</item></channel></rss>").encode()
+    assert [d.text for d in RtpNoticias(FakeHttp(lambda url, params: feed), STOPWORDS).fetch("x")] == [
+        "Notícia da RTP: Data errada.", "Notícia da RTP, de 2026-10-22 00:10: Sem zona."]
+
+
+@pytest.mark.parametrize("question", ["Há vagas de cozinheiro em Sintra?", "Há ofertas de trabalho para cozinheiro em Sintra?",
+                                      "Procuro trabalho como cozinheiro em Sintra"])
+def test_iefp_answers_the_common_ways_to_ask_for_a_job(question):
+    http = FakeHttp(lambda url, params: IEFP_PAGE.encode())
+    Iefp(http, STOPWORDS).fetch(question)
+    assert [url for url, _ in http.calls] == [f"{IEFP}?cat=ofertaEmprego&text=cozinheiro&concelho_facet=SINTRA"]
+
+
+def test_iefp_drops_a_job_word_that_the_server_cannot_read():
+    # ISO-8859-1 has no form of 厨师; an empty text would list every offer in the country
+    http = FakeHttp(lambda url, params: IEFP_PAGE.encode())
+    assert Iefp(http, STOPWORDS).fetch("Há vagas de emprego para 厨师?") == []
+    assert http.calls == []
+    Iefp(http, STOPWORDS).fetch("Há vagas de emprego para 厨师 em Braga?")
+    assert [url for url, _ in http.calls] == [f"{IEFP}?cat=ofertaEmprego&concelho_facet=BRAGA"]
+
+
+def test_iefp_reads_a_capitalised_sao_municipality():
+    http = FakeHttp(lambda url, params: IEFP_PAGE.encode())
+    Iefp(http, STOPWORDS).fetch("Ofertas de emprego para cozinheiro em São Brás de Alportel")
+    assert [url for url, _ in http.calls] == [
+        f"{IEFP}?cat=ofertaEmprego&text=cozinheiro&concelho_facet={quote_plus('SÃO BRÁS DE ALPORTEL'.encode('iso-8859-1'))}"]
+
+
+def test_a_name_that_starts_with_a_stopword_is_kept_inside_the_question():
+    source = Iefp(FakeHttp(lambda url, params: b""), STOPWORDS)
+    assert source.names("Onde fica São João da Madeira?") == ["São João da Madeira"]
+    assert source.names("Quando abre a Loja do Cidadão?") == ["Loja do Cidadão"]
+
+
+def test_carris_does_not_read_a_postal_code_as_a_line():
+    lines = [{"id": "2900", "long_name": "Lisboa (Campo Grande) - São Sebastião", "municipality_ids": ["1109"], "locality_ids": []},
+             {"id": "4400", "long_name": "Setúbal (Terminal) - Azeitão", "municipality_ids": ["1512"], "locality_ids": []}]
+    def route(url, params):
+        if url.endswith("/lines"):
+            return lines
+        if url.endswith("/municipalities"):
+            return {"data": [{"id": "1109", "name": "Mafra"}, {"id": "1512", "name": "Setúbal"}]}
+        return cm_route(url, params)
+    source = CarrisMetropolitana(FakeHttp(route), STOPWORDS)
+    source.now = lambda: 1792600000
+    assert [d.title for d in source.fetch("Que autocarros passam na Avenida Luísa Todi, 2900-461 Setúbal?")] == [
+        "Linhas da Carris Metropolitana em Setúbal"]
+    assert [d.title for d in source.fetch("Há alterações no autocarro número 2900?")] == ["Linha 2900 da Carris Metropolitana"]
+
+
+@pytest.mark.parametrize("index, risk", [("2.5", "moderado"), ("10.5", "extremo"), ("2.4", "baixo")])
+def test_ipma_rounds_a_uv_index_half_up_to_its_band(index, risk):
+    def route(url, params):
+        if url.endswith("/uv/uv.json"):
+            return [{"globalIdLocal": 1110600, "data": "2026-10-21", "iUv": index, "idPeriodo": 10}]
+        return ipma_topics_route(url, params)
+    source = Ipma(FakeHttp(route), STOPWORDS)
+    source.today = lambda: date(2026, 10, 21)
+    assert source.fetch("Qual é o índice UV em Lisboa?")[0].text.endswith(f", risco {risk}.")
+
+
+# the names that origin/dev 6987ef0 gives for these questions, before "São" was kept inside a question
+@pytest.mark.parametrize("question, names", [
+    ("Qual é a capital de Portugal? E a de Espanha?", ["Portugal", "Espanha"]),
+    ("Olá! Qual é a população de Faro?", ["Olá", "Faro"]),
+    ("Estou em Lisboa. Quando abre o museu?", ["Estou", "Lisboa"]),
+    ("1. Onde fica Évora?", ["Évora"]),
+    ("Bom dia, Qual é a população de Faro?", ["Bom", "Faro"]),
+    ("Como está o tempo em Lisboa? E No Porto?", ["Lisboa", "Porto"]),
+])
+def test_a_capitalised_question_word_at_a_sentence_start_is_not_a_name(question, names):
+    assert Iefp(FakeHttp(lambda url, params: b""), STOPWORDS).names(question) == names
+
+
+def test_carris_reads_a_line_before_a_range_of_years():
+    source = CarrisMetropolitana(FakeHttp(cm_route), STOPWORDS)
+    source.now = lambda: 1792600000
+    assert [d.title for d in source.fetch("Há alterações na linha 3210-2027?")] == ["Linha 3210 da Carris Metropolitana"]
