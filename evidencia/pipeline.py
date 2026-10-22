@@ -2,21 +2,24 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Callable, Iterable, Sequence
 
 import requests
+from ovos_plugin_manager.embeddings import load_embeddings_db_plugin
 
 from evidencia.config import Config
 from evidencia.decision import BATCH, Decision, DecisionRejected, DecisionUnavailable
 from evidencia.embeddings import Embedder, PluginEmbedder
 from evidencia.generators import PRESETS, build_generator
 from evidencia.gates import Gates, Verdict
-from evidencia.index import Collection, Passage
+from evidencia.index import Collection, Passage, db_collection_name
 from evidencia.sources import Source, SourceUnavailable, build_sources
 from evidencia.store import Store
 
@@ -125,9 +128,13 @@ class Evidencia:
         else:
             self.embed = Embedder(self.config.embedding_model) if self.config.embedding_model else None
         width = self.embed.load() if self.embed else None
+        self.vector_db = self._vector_db(width) if self.config.vector_db else None
         self.store = Store(self.config.data_dir, self.embed.id if self.embed else None,
                            width) if self.config.data_dir else None
-        self.collections: dict[str, Collection] = self.store.load(self.embed) if self.store else {}
+        # services that share a database server keep apart by their store; without one nothing persists
+        self.db_namespace = ((self.store.instance_id() if self.store else uuid.uuid4().hex)
+                             if self.vector_db is not None else "")
+        self.collections: dict[str, Collection] = self.store.load(self.embed, self.vector_db, self.db_namespace) if self.store else {}
         if sources is None:
             sources = build_sources(self.config.sources, self.config.user_agent,
                                     frozenset(self.gates.locale.get("stopwords", ())), self.config.lang,
@@ -136,12 +143,27 @@ class Evidencia:
                                     browserless_url=self.config.browserless_url)
         self.sources: dict[str, Source] = sources
 
+    def _vector_db(self, width: int):
+        plugin = load_embeddings_db_plugin(self.config.vector_db)
+        if plugin is None:
+            raise ValueError(f"embeddings database plugin {self.config.vector_db!r} is not installed")
+        config = dict(self.config.vector_db_config)
+        if "host" not in config and "path" not in config:
+            # a plugin's own default path is in the working directory
+            config["path"] = os.path.join(self.config.data_dir, "vectors")
+        config.setdefault("vector_size", width)
+        return plugin(config=config)
+
+    def _new_collection(self, name: str) -> Collection:
+        db_name = db_collection_name(name, self.embed.id, self.db_namespace) if self.vector_db is not None else ""
+        return Collection(name, lang=self.config.lang, embed=self.embed, db=self.vector_db, db_name=db_name)
+
     def collection(self, name: str, create: bool = False) -> Collection:
         with self._collections_lock:
             if name not in self.collections:
                 if not create:
                     raise KeyError(name)
-                self.collections[name] = Collection(name, lang=self.config.lang, embed=self.embed)
+                self.collections[name] = self._new_collection(name)
             return self.collections[name]
 
     def add_document(self, name: str, content: str | bytes, source: str, fmt: str = "text",
@@ -151,7 +173,7 @@ class Evidencia:
             col = self.collections.get(name)
         if col is None:
             # embedded outside the lock, so other requests are not held while a large document is embedded
-            fresh = Collection(name, lang=self.config.lang, embed=self.embed)
+            fresh = self._new_collection(name)
             added = fresh.add(content, source, fmt, url)
             with self._collections_lock:
                 col = self.collections.setdefault(name, fresh)
@@ -170,10 +192,12 @@ class Evidencia:
         return removed
 
     def drop_collection(self, name: str) -> None:
+        # under the lock: a collection of the same name created after the pop has the same database collection
         with self._collections_lock:
-            del self.collections[name]
+            col = self.collections.pop(name)
             if self.store:
                 self.store.delete(name)
+            col.drop()
 
     def _save(self, col: Collection) -> None:
         """Write ``col`` to the store, unless it was dropped while it changed."""

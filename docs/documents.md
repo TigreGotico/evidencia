@@ -108,6 +108,31 @@ model = "minishlab/potion-multilingual-128M"
 
 The [gates](gates.md) then decide which passages to use.
 
+### Vector databases
+
+`vector_db` names an embeddings database plugin that keeps the embeddings instead of evidencia's memory and vector files. `vector_db_config` holds its settings:
+
+```toml
+embedding_model = "minishlab/potion-multilingual-128M"
+data_dir = "collections"
+vector_db = "ovos-qdrant-embeddings-plugin"
+```
+
+| Plugin | Package | Default storage |
+| --- | --- | --- |
+| `ovos-chromadb-embeddings-plugin` | `ovos-chromadb-embeddings-plugin` | A folder on disk, or a chromadb server with `host` and `port` |
+| `ovos-qdrant-embeddings-plugin` | `ovos-qdrant-embeddings-plugin` | A folder on disk, or a qdrant server with `host`, `port` and `api_key` |
+
+Without `host` or `path` in `vector_db_config`, the database keeps its files in `<data_dir>/vectors`. Without `data_dir`, set one of them. evidencia sets `vector_size` from the embedder, unless the configuration sets it.
+
+Each collection has its own database collection. Its name comes from the collection name, the embedder and a random id that evidencia writes to `<data_dir>/instance.id` at the first start. A new embedder therefore starts with an empty database collection and never mixes vectors of two models. Two services that share a database server keep their collections apart, also when their `data_dir` has the same path in two containers. A `data_dir` that moves keeps its id and its database collections. Without `data_dir`, the passages do not persist, and each start uses new database collections.
+
+At start, evidencia asks the database which passages it holds, and embeds only the passages that it does not hold. When the database holds more rows than there are passages, evidencia rebuilds the database collection from the rows of its passages, without embedding them again. Such rows come from a write that stopped before evidencia saved the passages.
+
+A question uses the 200 nearest passages from the database, and fuses them with the BM25 ranking. Up to 200 passages, the ranking is the same as with the vectors in memory. In a larger collection, a passage below the 200 nearest gets no embedding score, so the ranking can differ. Dropping a collection drops its database collection.
+
+The JSON files in `data_dir` still hold the passages. BM25 needs them.
+
 ## Near-duplicates
 
 Copies of a page, quotes and reposts give many passages with almost the same text. Each one costs a select question, and they can fill the evidence with one fact.

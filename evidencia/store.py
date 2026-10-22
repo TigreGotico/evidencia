@@ -11,10 +11,11 @@ import json
 import logging
 import os
 import threading
+import uuid
 from pathlib import Path
 from urllib.parse import quote
 
-from evidencia.index import Collection, Embed, Passage
+from evidencia.index import Collection, Embed, Passage, db_collection_name
 
 LOG = logging.getLogger("evidencia")
 
@@ -28,6 +29,17 @@ class Store:
         self.width = width
         self.path.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+
+    def instance_id(self) -> str:
+        """A random id made at the first start and kept in the directory. Services that share a vector database
+        server keep apart by it, also when their directories have the same path in different containers."""
+        path = self.path / "instance.id"
+        try:
+            with open(path, "x", encoding="utf-8") as f:
+                f.write(uuid.uuid4().hex)
+        except FileExistsError:
+            pass
+        return path.read_text(encoding="utf-8").strip()
 
     def _file(self, name: str) -> Path:
         # quote() leaves no "/" in the file name, so a collection name cannot reach outside the directory
@@ -63,7 +75,9 @@ class Store:
             self._file(name).unlink(missing_ok=True)
             self._vectors_file(name).unlink(missing_ok=True)
 
-    def load(self, embed: Embed | None = None) -> dict[str, Collection]:
+    def load(self, embed: Embed | None = None, db=None, namespace: str = "") -> dict[str, Collection]:
+        """Every collection on disk. With ``db``, the rows live in that vector database, not in vector files, in
+        database collections named with ``namespace``."""
         collections = {}
         for path in sorted(self.path.glob("*.json")):
             # only a file that cannot be read is set aside; an index that cannot be built stops the start
@@ -76,8 +90,9 @@ class Store:
                 LOG.error("collection file %s cannot be read (%s); moved to %s", path, e, aside)
                 path.replace(aside)
                 continue
-            stored = self._stored_vectors(name, passages) if embed else None
-            collections[name] = col = Collection(name, lang, passages, embed, stored)
+            stored = self._stored_vectors(name, passages) if embed and db is None else None
+            db_name = db_collection_name(name, self.embedder_id, namespace) if db is not None else ""
+            collections[name] = col = Collection(name, lang, passages, embed, stored, db, db_name)
             if stored is None and col.vectors is not None:
                 self.save(col)      # embedded at this start; the next start reads the rows
         return collections
