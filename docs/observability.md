@@ -50,7 +50,7 @@ The lines in the next sections add their own fields to the object.
 
 ### Request lines
 
-The service writes one line for each request when the response starts. The message holds the path, with control characters percent-encoded. An error that no handler catches gives a 500 reply with the request id, and an `ERROR` line with the traceback under the same id. `GET /health` and `GET /metrics` log at `DEBUG`, and the other routes at `INFO`. The service turns off uvicorn's access log, because these lines replace it.
+The service writes one line for each request when the response starts. The message holds the path, percent-encoded. An error that no handler catches gives a 500 reply with the request id, and an `ERROR` line with the traceback under the same id. `GET /health` and `GET /metrics` log at `DEBUG`, and the other routes at `INFO`. The service turns off uvicorn's access log, because these lines replace it.
 
 | Field | Value |
 | --- | --- |
