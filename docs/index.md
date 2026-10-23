@@ -48,6 +48,7 @@ Read the pages in this order. Each page links to the next one at its end.
 | [Vendor APIs](vendor-apis.md) | OpenAI, Ollama, Anthropic, Gemini and other clients, through ovos-persona-server, and the OpenAI vector store search |
 | [Configuration](configuration.md) | Every setting and environment variable |
 | [Deployment](deployment.md) | Every deployment option, containers, OVOS personas, authentication and health checks |
+| [Observability](observability.md) | Request ids, text and JSON logs, and the Prometheus metrics |
 | [Python](python.md) | Use evidencia as a library |
 | [Evaluation](evaluation.md) | The pt-PT gate cases and the measurement scripts |
 | [Troubleshooting](troubleshooting.md) | Each error message and its fix |

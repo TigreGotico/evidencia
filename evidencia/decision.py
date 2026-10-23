@@ -8,10 +8,11 @@ checkpoint in this process.
 from __future__ import annotations
 
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
 import requests
+
+from evidencia.observability import REQUEST_ID, ContextPool
 
 DEFAULT_MODEL = "kev-latest"
 # statuses that refuse the request content; an auth or routing error means the backend is unusable instead
@@ -55,12 +56,15 @@ class HttpDecision:
         self.workers = workers
         self.session = requests.Session()
         self._local = threading.local()     # a session for each worker thread of ask_many
-        self._pool: ThreadPoolExecutor | None = None
+        self._pool: ContextPool | None = None
         self._pool_lock = threading.Lock()
 
     @property
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.key}"} if self.key else {}
+        headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
+        if (rid := REQUEST_ID.get()) != "-":
+            headers["X-Request-ID"] = rid
+        return headers
 
     def ask(self, state: Any, questions: dict[str, dict]) -> dict[str, dict]:
         return self._ask(self.session, state, questions)
@@ -78,7 +82,7 @@ class HttpDecision:
             return [one(item) for item in items]
         with self._pool_lock:
             if self._pool is None:
-                self._pool = ThreadPoolExecutor(self.workers, thread_name_prefix="decision")
+                self._pool = ContextPool(self.workers, thread_name_prefix="decision")
         return list(self._pool.map(one, items))
 
     def _ask(self, session: requests.Session, state: Any, questions: dict[str, dict]) -> dict[str, dict]:

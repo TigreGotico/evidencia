@@ -7,6 +7,7 @@ from importlib import resources
 from typing import Sequence
 
 from evidencia.decision import Decision, DecisionRejected, DecisionUnavailable
+from evidencia.observability import DECISION_CALLS, DECISION_ERRORS, SELECT_BATCH
 
 
 def load_locale(lang: str) -> dict:
@@ -35,7 +36,15 @@ class Gates:
         self.locale = load_locale(lang)
 
     def _noul(self, gate: str, state: dict) -> float:
-        return self._probability(gate, self.decision.ask(state, {gate: self.locale[gate]}))
+        DECISION_CALLS.labels(gate).inc()
+        try:
+            return self._probability(gate, self.decision.ask(state, {gate: self.locale[gate]}))
+        except DecisionRejected:
+            DECISION_ERRORS.labels(gate, "rejected").inc()
+            raise
+        except DecisionUnavailable:
+            DECISION_ERRORS.labels(gate, "unavailable").inc()
+            raise
 
     @staticmethod
     def _probability(gate: str, answers: dict) -> float:
@@ -54,8 +63,17 @@ class Gates:
     def select_many(self, question: str, passages: Sequence[str]) -> list[float | DecisionRejected]:
         """P(select) for each passage, in one call to the backend; a refused passage gives its DecisionRejected."""
         questions = {"select": self.locale["select"]}
-        answers = self.decision.ask_many([({"question": question, "passage": p}, questions) for p in passages])
-        return [a if isinstance(a, DecisionRejected) else self._probability("select", a) for a in answers]
+        DECISION_CALLS.labels("select").inc()
+        SELECT_BATCH.observe(len(passages))
+        try:
+            answers = self.decision.ask_many([({"question": question, "passage": p}, questions) for p in passages])
+            out = [a if isinstance(a, DecisionRejected) else self._probability("select", a) for a in answers]
+        except DecisionUnavailable:
+            DECISION_ERRORS.labels("select", "unavailable").inc()
+            raise
+        if rejected := sum(isinstance(p, DecisionRejected) for p in out):
+            DECISION_ERRORS.labels("select", "rejected").inc(rejected)
+        return out
 
     def sufficient(self, question: str, evidence: Sequence[str]) -> float:
         """P(the evidence is enough to answer the question)."""

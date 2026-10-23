@@ -6,7 +6,11 @@ Start the service with `evidencia serve`. The request and response bodies are JS
 
 ## Authentication
 
-When `api_key` is set, every `/v1` call must send the header `Authorization: Bearer <api_key>`. `GET /`, `GET /health` and the OpenAPI pages (`/docs`, `/redoc`, `/openapi.json`) need no token. A missing or wrong token returns 401. When `api_key` is not set, the service needs no token. Refer to [Deployment](deployment.md).
+When `api_key` is set, every `/v1` call and `GET /metrics` must send the header `Authorization: Bearer <api_key>`. `GET /`, `GET /health` and the OpenAPI pages (`/docs`, `/redoc`, `/openapi.json`) need no token. A missing or wrong token returns 401. When `api_key` is not set, the service needs no token. Refer to [Deployment](deployment.md).
+
+## Request ids
+
+Send `X-Request-ID` with a request to find its log lines. Every reply has the id in its `X-Request-ID` header. Without a valid id, the service makes one. Refer to [Observability](observability.md#request-ids).
 
 ## Endpoints
 
@@ -28,6 +32,7 @@ When `api_key` is set, every `/v1` call must send the header `Authorization: Bea
 | `GET /v1/models` | Names the model that `/v1/systemone` serves |
 | `GET /v1/status` | Returns the backend, the chat model, the thresholds, the retrieval settings and the enabled sources |
 | `GET /health` | Returns whether the service and its decision backend are reachable. Needs no token |
+| `GET /metrics` | The Prometheus metrics. Needs the token when `api_key` is set. Refer to [Observability](observability.md) |
 | `GET /` | The [demo page](demo.md), when `ui` is true. Needs no token |
 
 ## Documents

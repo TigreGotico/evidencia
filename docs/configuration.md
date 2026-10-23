@@ -24,7 +24,7 @@ device = "cpu"
 
 Put the top-level settings above the first `[table]` line. In TOML, a setting below `[generator_config]` belongs to that table, and evidencia then stops with `unknown generator_config keys`.
 
-An unknown key stops the service when it starts, with an error that names the key. So does a threshold that is not a number from 0 to 1, a count that is not a positive integer, an empty `api_key`, an unknown source, a `dedupe_threshold` without `embedding_model` or `embedder`, both `embedder` and `embedding_model`, an `embedder` plugin that is not installed, a `vector_db` without embeddings or without a place to keep them, a `vector_db` plugin that is not installed, an embedding model that cannot load, and a preset that needs a key or a model that is not set.
+An unknown key stops the service when it starts, with an error that names the key. So does a threshold that is not a number from 0 to 1, a count that is not a positive integer, an empty `api_key`, an unknown source, a `dedupe_threshold` without `embedding_model` or `embedder`, both `embedder` and `embedding_model`, an `embedder` plugin that is not installed, a `vector_db` without embeddings or without a place to keep them, a `vector_db` plugin that is not installed, an unknown `log_format` or `log_level`, an embedding model that cannot load, and a preset that needs a key or a model that is not set.
 
 ## Settings
 
@@ -61,6 +61,8 @@ An unknown key stops the service when it starts, with an error that names the ke
 | `flaresolverr_url` | none | A FlareSolverr server. A GET that a site refuses is sent again through it |
 | `browserless_url` | none | A browserless server, for `transport = "browserless"` |
 | `ui` | `true` | Serves the [demo page](demo.md) at `/` |
+| `log_format` | `text` | `text`, or `json` for one JSON object per line. Refer to [Observability](observability.md) |
+| `log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`, in any case. `DEBUG` adds a line for each select decision |
 
 ## Decision settings
 
@@ -96,6 +98,8 @@ A variable that is set and not empty replaces the value from the file. `EVIDENCI
 | `EVIDENCIA_TRANSPORT` | `transport` |
 | `EVIDENCIA_FLARESOLVERR_URL` | `flaresolverr_url` |
 | `EVIDENCIA_BROWSERLESS_URL` | `browserless_url` |
+| `EVIDENCIA_LOG_FORMAT` | `log_format` |
+| `EVIDENCIA_LOG_LEVEL` | `log_level` |
 | `EVIDENCIA_SOURCES` | `sources`, as a comma-separated list: `pt.wikipedia,wikidata` |
 | `EVIDENCIA_DECISION_BACKEND` | `decision.backend` |
 | `EVIDENCIA_DECISION_URL` | `decision.url` |

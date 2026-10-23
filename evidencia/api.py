@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hmac
 import json
 import logging
@@ -15,13 +16,15 @@ from typing import Annotated, Literal
 from curl_cffi import requests as curl
 from curl_cffi.const import CurlECode, CurlOpt
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from evidencia import __version__
 from evidencia.config import REQUEST_SIZES, THRESHOLDS, Config
 from evidencia.decision import DecisionRejected, DecisionUnavailable
 from evidencia.index import FORMATS
+from evidencia.observability import REQUEST_ID, REQUEST_SECONDS, REQUESTS, request_id
 from evidencia.pipeline import Evidencia, GeneratorUnavailable
 from evidencia.sources import CATALOG, RemoteSource
 
@@ -129,6 +132,30 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
             return JSONResponse({"detail": f"request body larger than {max_body} bytes"}, status_code=413)
         return await call_next(request)
 
+    # added after body_limit, so it is the outer middleware and sees the requests body_limit refuses
+    @app.middleware("http")
+    async def observe(request: Request, call_next):
+        rid = request_id(request.headers.get("x-request-id"))
+        token = REQUEST_ID.set(rid)
+        started = time.perf_counter()
+        status = 500
+        try:
+            response = await call_next(request)
+            status = response.status_code
+            response.headers["x-request-id"] = rid
+            return response
+        finally:
+            seconds = time.perf_counter() - started
+            # the route template, not the path, so a collection or document name adds no metric series
+            route = getattr(request.scope.get("route"), "path", "unmatched")
+            REQUESTS.labels(route, request.method, str(status)).inc()
+            REQUEST_SECONDS.labels(route).observe(seconds)
+            LOG.log(logging.DEBUG if route in ("/health", "/metrics") else logging.INFO,
+                    "%s %s %s %.0f ms", request.method, request.url.path, status, seconds * 1000,
+                    extra={"method": request.method, "route": route, "status": status,
+                           "duration_ms": round(seconds * 1000, 1)})
+            REQUEST_ID.reset(token)
+
     def auth(request: Request):
         if not config.api_key:
             return
@@ -209,6 +236,10 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
         reachable = decision_reachable()
         return {"status": "ok" if reachable else "degraded", "version": __version__,
                 "decision_reachable": reachable}
+
+    @app.get("/metrics", dependencies=[Depends(auth)], include_in_schema=False)
+    def metrics():
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/v1/status", dependencies=[Depends(auth)])
     def status():
@@ -360,7 +391,8 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
                 events.put(("error", {"status": 500, "detail": "internal error"}))
             events.put(None)
 
-        threading.Thread(target=run, daemon=True).start()
+        # in a copy of the request's context, so its log lines carry the request id
+        threading.Thread(target=contextvars.copy_context().run, args=(run,), daemon=True).start()
 
         async def stream():
             while True:

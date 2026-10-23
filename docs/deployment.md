@@ -145,7 +145,7 @@ The service has no TLS. Put it behind a reverse proxy that terminates TLS when t
 
 ## Logs
 
-The service writes its log to standard error and the HTTP access log to standard output. When the decision backend, the chat model or a public source fails, the log line holds the cause, and the client gets a fixed message.
+The service writes every log line to standard error, one line for each request included. Each line holds the request id, and `log_format = "json"` writes each line as a JSON object. When the decision backend, the chat model or a public source fails, the log line holds the cause, and the client gets a fixed message. Refer to [Observability](observability.md) for the fields and the Prometheus metrics at `GET /metrics`.
 
 ---
-[← Configuration](configuration.md) · [Home](index.md) · [Python →](python.md)
+[← Configuration](configuration.md) · [Home](index.md) · [Observability →](observability.md)

@@ -11,7 +11,7 @@ import time
 import unicodedata
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -26,6 +26,7 @@ import requests
 from unblock_requests import CloudflareSession
 
 from evidencia.index import Collection, Embed, Passage
+from evidencia.observability import SOURCE_ERRORS, SOURCE_FETCHES, SOURCE_PAUSES, ContextPool
 
 LOG = logging.getLogger("evidencia")
 MAX_REMOTE_BYTES = 2_000_000    # the most text read from one remote document
@@ -283,6 +284,7 @@ class RemoteSource:
             if isinstance(e, SourceUnavailable):
                 raise
             raise SourceUnavailable(f"{self.name}: {type(e).__name__}: {e}") from e
+        SOURCE_FETCHES.labels(self.name).inc()
         with self._lock:
             self._fetches += 1
             self._in_a_row = 0
@@ -311,17 +313,20 @@ class RemoteSource:
             # a requests error is also an OSError, so the requests errors that are not of the service go first
             of_service = isinstance(error, (SourceUnavailable, requests.ConnectionError, requests.Timeout, RuntimeError)) \
                 or isinstance(error, OSError) and not isinstance(error, requests.RequestException)
+        SOURCE_FETCHES.labels(self.name).inc()
         with self._lock:
             self._fetches += 1
             if of_service:
                 self._in_a_row += 1
                 if self._in_a_row >= BREAKER_FAILURES:
                     self._paused_until = time.monotonic() + BREAKER_PAUSE
+                    SOURCE_PAUSES.labels(self.name).inc()
             self._last_latency_ms = round(seconds * 1000)
         self._noted(error)
 
     def _noted(self, error: Exception):
         """Count a failure in the health of the source, without counting it towards a pause."""
+        SOURCE_ERRORS.labels(self.name).inc()
         status = error.response.status_code if isinstance(error, requests.HTTPError) and error.response is not None \
             else None
         with self._lock:
@@ -385,7 +390,7 @@ class MediaWiki(RemoteSource):
         ids = list(dict.fromkeys(ids + [hit["pageid"] for hit in found["query"]["search"]]))[:self.pool]
         if not ids:
             return []
-        with ThreadPoolExecutor(len(ids)) as pool:
+        with ContextPool(len(ids)) as pool:
             return [doc for doc in pool.map(self.page, ids) if doc]
 
     def page(self, pageid: int) -> Document | None:
@@ -552,7 +557,7 @@ class DicionarioAberto(RemoteSource):
 
     def fetch(self, question: str) -> list[Document]:
         words = [w for w in self.terms(question) if len(w) > 2][:self.pool]
-        with ThreadPoolExecutor(max(len(words), 1)) as pool:
+        with ContextPool(max(len(words), 1)) as pool:
             return [doc for docs in pool.map(self.word, words) for doc in docs]
 
     def word(self, word: str) -> list[Document]:
@@ -583,7 +588,7 @@ class ArquivoPt(RemoteSource):
     def fetch(self, question: str) -> list[Document]:
         data = self.get_json(self.api, q=" ".join(self.terms(question)), maxItems=self.pool, prettyPrint="false")
         hits = data.get("response_items", [])
-        with ThreadPoolExecutor(max(len(hits), 1)) as pool:
+        with ContextPool(max(len(hits), 1)) as pool:
             return [doc for doc in pool.map(self.page, hits) if doc]
 
     def page(self, hit: dict) -> Document | None:
@@ -645,7 +650,7 @@ class GovPt(RemoteSource):
         queries = [" ".join(run) for run in runs][:self.searches]
         if not queries:
             return []
-        with ThreadPoolExecutor(len(queries)) as pool:
+        with ContextPool(len(queries)) as pool:
             hits = {hit["_id"]: hit for found in pool.map(self.query, queries) for hit in found}
         return [doc for hit in hits.values() if (doc := self.document(hit))]
 
@@ -714,7 +719,7 @@ class GeoApiPt(RemoteSource):
         lookups = [(self.place, name) for name in self.names(question)]
         lookups += [(self.postal_code, code) for code in POSTAL_CODE.findall(question)]
         lookups = lookups[:self.pool]
-        with ThreadPoolExecutor(max(len(lookups), 1)) as pool:
+        with ContextPool(max(len(lookups), 1)) as pool:
             return [doc for doc in pool.map(lambda lookup: lookup[0](lookup[1]), lookups) if doc]
 
     def lookup(self, path: str):
@@ -1092,7 +1097,7 @@ class Vies(RemoteSource):
 
     def fetch(self, question: str) -> list[Document]:
         numbers = list(dict.fromkeys(nifs(question)))[:self.pool]
-        with ThreadPoolExecutor(max(len(numbers), 1)) as pool:
+        with ContextPool(max(len(numbers), 1)) as pool:
             return list(pool.map(self.company, numbers))
 
     def company(self, nif: str) -> Document:
@@ -1129,13 +1134,13 @@ class Gleif(RemoteSource):
         searches += [{"filter[entity.registeredAs]": nif} for nif in nifs(question)][:2]
         if not searches:
             return []
-        with ThreadPoolExecutor(len(searches)) as pool:
+        with ContextPool(len(searches)) as pool:
             pages = list(pool.map(self.lookup, searches))
         # a name with no entity may hold one at its end: "NIPC da EDP" is EDP. Only then, because the end of
         # "Câmara Municipal do Porto" is a place that many companies have in their name
         retry = [{"filter[entity.legalName]": tails(f["filter[entity.legalName]"])[-1]} for f, page in zip(searches, pages)
                  if not page and len(tails(f.get("filter[entity.legalName]", ""))) > 1]
-        with ThreadPoolExecutor(max(len(retry), 1)) as pool:
+        with ContextPool(max(len(retry), 1)) as pool:
             pages += pool.map(self.lookup, retry)
         records = {r["id"]: r for page in pages for r in page}
         return [self.document(r["attributes"]) for r in records.values()]
@@ -1178,7 +1183,7 @@ class DnsPt(RemoteSource):
 
     def fetch(self, question: str) -> list[Document]:
         domains = list(dict.fromkeys(self.registered(d.lower()) for d in DOMAIN.findall(question)))[:self.pool]
-        with ThreadPoolExecutor(max(len(domains), 1)) as pool:
+        with ContextPool(max(len(domains), 1)) as pool:
             return list(pool.map(self.whois, domains))
 
     @staticmethod

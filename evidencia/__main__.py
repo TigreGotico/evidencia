@@ -1,6 +1,5 @@
 """Command line: ``evidencia serve`` and ``evidencia mcp``."""
 import argparse
-import logging
 import os
 
 
@@ -26,9 +25,12 @@ def main(argv=None):
     import uvicorn
     from evidencia.api import create_app
     from evidencia.config import Config
+    from evidencia.observability import configure_logging
 
-    logging.basicConfig(level=logging.INFO)
-    uvicorn.run(create_app(Config.load(args.config)), host=args.host, port=args.port)
+    config = Config.load(args.config)
+    configure_logging(config.log_format, config.log_level)
+    # the service logs each request itself, with its request id, so uvicorn's access log is off
+    uvicorn.run(create_app(config), host=args.host, port=args.port, log_config=None, access_log=False)
 
 
 if __name__ == "__main__":

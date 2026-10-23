@@ -14,6 +14,8 @@ from typing import Any, Sequence
 
 from ovos_plugin_manager.embeddings import load_text_embeddings_plugin
 
+from evidencia.observability import EMBED_CALLS, EMBED_TEXTS
+
 # settings that change no vector: a rotated key must not make every collection embed again
 SECRETS = frozenset({"key", "api_key", "token", "password"})
 
@@ -45,6 +47,8 @@ class Embedder:
         return self(["evidencia"]).shape[1]
 
     def __call__(self, texts: Sequence[str]):
+        EMBED_CALLS.inc()
+        EMBED_TEXTS.inc(len(texts))
         return _normalised(self._ready().encode(list(texts)))
 
 
@@ -65,4 +69,6 @@ class PluginEmbedder:
         return self(["evidencia"]).shape[1]
 
     def __call__(self, texts: Sequence[str]):
+        EMBED_CALLS.inc()
+        EMBED_TEXTS.inc(len(texts))
         return _normalised(self.engine.get_embeddings_batch(list(texts)))
