@@ -172,4 +172,4 @@ Raise `DecisionUnavailable` when the backend cannot answer. Raise `DecisionRejec
 | `ValueError` | A document has no text, has an unknown format, or is not a readable PDF. A call names a source that is not enabled, or names no collection and no source. A setting that is not valid |
 
 ---
-[← Deployment](deployment.md) · [Home](index.md) · [Evaluation →](evaluation.md)
+[← Observability](observability.md) · [Home](index.md) · [Evaluation →](evaluation.md)

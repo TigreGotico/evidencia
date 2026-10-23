@@ -105,6 +105,7 @@ No GPU? Use Claude or another hosted model instead of AMALIA: refer to [Chat mod
 | [Vendor APIs](docs/vendor-apis.md) | Chat through the OpenAI, Ollama, Anthropic and Gemini APIs, and the OpenAI vector-store search |
 | [Configuration](docs/configuration.md) | Every setting and environment variable |
 | [Deployment](docs/deployment.md) | Every deployment option, containers, OVOS personas, authentication and health checks |
+| [Observability](docs/observability.md) | Request ids, text and JSON logs, and the Prometheus metrics |
 | [Python](docs/python.md) | Use evidencia as a library |
 | [Evaluation](docs/evaluation.md) | The pt-PT gate cases and the measurement scripts |
 | [Troubleshooting](docs/troubleshooting.md) | Each error message and its fix |

@@ -7,7 +7,6 @@ import re
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Callable, Iterable, Sequence
 
@@ -20,6 +19,7 @@ from evidencia.embeddings import Embedder, PluginEmbedder
 from evidencia.generators import PRESETS, build_generator
 from evidencia.gates import Gates, Verdict
 from evidencia.index import Collection, Passage, db_collection_name
+from evidencia.observability import ABSTENTIONS, ContextPool
 from evidencia.sources import Source, SourceUnavailable, build_sources
 from evidencia.store import Store
 
@@ -84,6 +84,23 @@ class ContextResult:
                 "abstained_at": self.abstained_at,
                 "sources": self.sources,
                 "timings_ms": self.timings_ms}
+
+
+def _log_verdict(gate: str, verdict: Verdict, **fields) -> None:
+    LOG.info("%s: p %.3f, threshold %s, %s", gate, verdict.p, verdict.threshold,
+             "passed" if verdict.passed else "failed", extra={"gate": gate, **verdict.as_dict(), **fields})
+
+
+def _summarised(ctx: ContextResult) -> ContextResult:
+    """``ctx``, after its log line and its abstention count."""
+    if ctx.abstained_at:
+        ABSTENTIONS.labels(ctx.abstained_at).inc()
+    LOG.info("context: rounds %d, evidence %d, %s", ctx.rounds, len(ctx.evidence),
+             f"abstained at {ctx.abstained_at}" if ctx.abstained_at else "sufficient" if ctx.gated else "ungated",
+             extra={"rounds": ctx.rounds, "evidence": len(ctx.evidence), "abstained_at": ctx.abstained_at,
+                    "gated": ctx.gated, "duration_ms": round(ctx.timings_ms.get("total", 0.0), 1),
+                    "sources": ctx.sources})
+    return ctx
 
 
 def cited(answer: str, evidence_count: int) -> list[int]:
@@ -257,7 +274,7 @@ class Evidencia:
         if len(targets) == 1:
             results = [one(targets[0])]
         else:
-            with ThreadPoolExecutor(len(targets)) as pool:
+            with ContextPool(len(targets)) as pool:
                 results = list(pool.map(one, targets))
         return _interleave(results)
 
@@ -327,6 +344,11 @@ class Evidencia:
                     for p, p_select in zip(chunk, self.select_many(question, chunk)):
                         report[p.origin]["candidates"] += 1
                         scored[_key(p)] = ScoredPassage(p, p_select)
+                        passed = p_select is not None and p_select >= cfg.select_threshold
+                        LOG.debug("select %s from %s: p %s, threshold %s, %s", p.id, p.origin, p_select,
+                                  cfg.select_threshold, "passed" if passed else "failed",
+                                  extra={"gate": "select", "passage_id": p.id, "origin": p.origin, "p": p_select,
+                                         "threshold": cfg.select_threshold, "passed": passed, "round": rounds})
                         emit("select", {"round": rounds, **scored[_key(p)].as_dict()})
                 timings["select"] += (time.perf_counter() - t) * 1000
                 kept = [s for s in scored.values() if s.p_select is not None and s.p_select >= cfg.select_threshold]
@@ -350,6 +372,7 @@ class Evidencia:
                     sufficient = None
                     break
                 timings["sufficient"] += (time.perf_counter() - t) * 1000
+                _log_verdict("sufficient", sufficient, round=rounds)
                 emit("sufficient", {"round": rounds, **sufficient.as_dict()})
                 if sufficient.passed:
                     break
@@ -359,10 +382,11 @@ class Evidencia:
             LOG.warning("decision backend unavailable (%s); answering without gates", e)
             result = self._ungated(question, targets, report, started, cfg)
             emit("gates_unavailable", {"candidates": [s.as_dict() for s in result.candidates]})
-            return result
+            return _summarised(result)
         timings["total"] = (time.perf_counter() - started) * 1000
-        return ContextResult(question, evidence, list(scored.values()), max(rounds, 1), sufficient, gated=True,
-                             select_threshold=cfg.select_threshold, timings_ms=timings, sources=list(report.values()))
+        return _summarised(ContextResult(question, evidence, list(scored.values()), max(rounds, 1), sufficient,
+                                         gated=True, select_threshold=cfg.select_threshold, timings_ms=timings,
+                                         sources=list(report.values())))
 
     def retrieve(self, question: str, collection: str | None = None, sources: Sequence[str] = (), k: int = 8,
                  settings: Config | None = None) -> dict:
@@ -457,13 +481,16 @@ class Evidencia:
             return result
         except DecisionRejected as e:
             LOG.warning("decision model rejected the grounding question (%s); abstaining", e)
+            ABSTENTIONS.labels("grounded").inc()
             result.update(abstained_at="grounded", message=self.gates.locale["abstain"])
             return result
         result["timings_ms"]["grounded"] = (time.perf_counter() - t) * 1000
         result["grounded"] = grounded.as_dict()
+        _log_verdict("grounded", grounded)
         emit("grounded", grounded.as_dict())
         if grounded.passed:
             result["answer"] = draft
         else:
+            ABSTENTIONS.labels("grounded").inc()
             result.update(abstained_at="grounded", message=self.gates.locale["abstain"])
         return result

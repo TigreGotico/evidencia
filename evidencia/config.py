@@ -6,6 +6,7 @@ import tomllib
 from dataclasses import dataclass, field, fields, replace
 from typing import Any
 
+from evidencia.observability import LOG_FORMATS, LOG_LEVELS
 from evidencia.version import __version__
 
 TRANSPORTS = {"requests", "curl_cffi", "flaresolverr", "browserless"}
@@ -69,6 +70,8 @@ class Config:
     vector_db_config: dict[str, Any] = field(default_factory=dict)
     dedupe_threshold: float | None = None              # drop a candidate this similar to one already seen
     ui: bool = True                                    # serve the demo page at /
+    log_format: str = "text"                           # text, or json for one JSON object per line
+    log_level: str = "INFO"                            # DEBUG adds one line per select decision
 
     def __post_init__(self):
         if isinstance(self.decision, dict):
@@ -106,6 +109,11 @@ class Config:
                 raise ValueError("vector_db needs embedding_model or embedder")
             if not self.data_dir and not {"host", "path"} & set(self.vector_db_config):
                 raise ValueError("vector_db needs data_dir, or a host or path in vector_db_config")
+        if self.log_format not in LOG_FORMATS:
+            raise ValueError(f"log_format must be one of {list(LOG_FORMATS)}, got {self.log_format!r}")
+        if not isinstance(self.log_level, str) or self.log_level.upper() not in LOG_LEVELS:
+            raise ValueError(f"log_level must be one of {list(LOG_LEVELS)}, got {self.log_level!r}")
+        self.log_level = self.log_level.upper()
         if self.transport is not None and self.transport not in TRANSPORTS:
             raise ValueError(f"transport must be one of {sorted(TRANSPORTS)}, got {self.transport!r}")
         if isinstance(self.source_timeout, bool) or not isinstance(self.source_timeout, (int, float)) \
@@ -157,7 +165,8 @@ class Config:
         if env.get("EVIDENCIA_DATA_DIR"):
             data["data_dir"] = env["EVIDENCIA_DATA_DIR"]
         for var, key in (("EVIDENCIA_TRANSPORT", "transport"), ("EVIDENCIA_FLARESOLVERR_URL", "flaresolverr_url"),
-                         ("EVIDENCIA_BROWSERLESS_URL", "browserless_url")):
+                         ("EVIDENCIA_BROWSERLESS_URL", "browserless_url"), ("EVIDENCIA_LOG_FORMAT", "log_format"),
+                         ("EVIDENCIA_LOG_LEVEL", "log_level")):
             if env.get(var):
                 data[key] = env[var]
         if env.get("EVIDENCIA_SOURCES"):
