@@ -71,18 +71,20 @@ class JsonFormatter(logging.Formatter):
                 + f".{int(record.msecs):03d}Z",
                 "level": record.levelname, "logger": record.name, "message": record.getMessage(),
                 "request_id": getattr(record, "request_id", "-")}
-        line.update((k, v) for k, v in vars(record).items() if k not in STANDARD)
+        line.update((k, v) for k, v in vars(record).items() if k not in STANDARD and k not in line)
         if record.exc_info:
             line["exception"] = self.formatException(record.exc_info)
         return json.dumps(line, ensure_ascii=False, default=str)
 
 
 def configure_logging(fmt: str = "text", level: str = "INFO") -> None:
-    """Send every log line of the process, uvicorn's included, to stderr in ``fmt``."""
+    """Send every log line of the process, uvicorn's included, to stderr in ``fmt``. ``DEBUG`` applies to the
+    evidencia logger only: at DEBUG, urllib3 logs each URL, and the URL of a public source holds the question."""
     handler = logging.StreamHandler(sys.stderr)
     handler.addFilter(RequestIdFilter())
     handler.setFormatter(JsonFormatter() if fmt == "json" else
                          logging.Formatter("%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s"))
     root = logging.getLogger()
     root.handlers[:] = [handler]
-    root.setLevel(level)
+    root.setLevel("INFO" if level == "DEBUG" else level)
+    logging.getLogger("evidencia").setLevel(level)

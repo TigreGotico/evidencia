@@ -62,7 +62,7 @@ An unknown key stops the service when it starts, with an error that names the ke
 | `browserless_url` | none | A browserless server, for `transport = "browserless"` |
 | `ui` | `true` | Serves the [demo page](demo.md) at `/` |
 | `log_format` | `text` | `text`, or `json` for one JSON object per line. Refer to [Observability](observability.md) |
-| `log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`, in any case. `DEBUG` adds a line for each select decision |
+| `log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`, in any case. `DEBUG` applies to the lines of evidencia only, and adds a line for each select decision |
 
 ## Decision settings
 

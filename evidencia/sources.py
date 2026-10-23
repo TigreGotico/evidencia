@@ -319,8 +319,10 @@ class RemoteSource:
             if of_service:
                 self._in_a_row += 1
                 if self._in_a_row >= BREAKER_FAILURES:
+                    # a fetch that started before the pause and fails during it extends the pause, not a new one
+                    if self._paused_until <= time.monotonic():
+                        SOURCE_PAUSES.labels(self.name).inc()
                     self._paused_until = time.monotonic() + BREAKER_PAUSE
-                    SOURCE_PAUSES.labels(self.name).inc()
             self._last_latency_ms = round(seconds * 1000)
         self._noted(error)
 

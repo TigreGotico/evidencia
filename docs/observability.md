@@ -29,7 +29,7 @@ Set `log_format` and `log_level` in the configuration file, or `EVIDENCIA_LOG_FO
 | `log_format` | `text` or `json` | `text` |
 | `log_level` | `DEBUG`, `INFO`, `WARNING` or `ERROR`, in any case | `INFO` |
 
-Every line of the process goes to standard error, uvicorn's lines included. A text line holds the time, the level, the logger, the request id in brackets and the message:
+The lines of the service and of uvicorn go to standard error, one line each. `DEBUG` applies to the lines of the service only, and the libraries log from `INFO`. At `DEBUG`, a library such as urllib3 would log each URL, and the URL of a request to a public source holds the words of the question. The OVOS plugin libraries write their own lines to standard output, in their own text format. Read standard error for the JSON lines. A text line holds the time, the level, the logger, the request id in brackets and the message:
 
 ```text
 2026-10-23 17:18:39,927 INFO evidencia [support-4711] POST /v1/context 200 14 ms
@@ -50,12 +50,12 @@ The lines in the next sections add their own fields to the object.
 
 ### Request lines
 
-The service writes one line for each request when the response starts. `GET /health` and `GET /metrics` log at `DEBUG`, and the other routes at `INFO`. The service turns off uvicorn's access log, because these lines replace it.
+The service writes one line for each request when the response starts. The message holds the path, with control characters percent-encoded. An error that no handler catches gives a 500 reply with the request id, and an `ERROR` line with the traceback under the same id. `GET /health` and `GET /metrics` log at `DEBUG`, and the other routes at `INFO`. The service turns off uvicorn's access log, because these lines replace it.
 
 | Field | Value |
 | --- | --- |
-| `method` | The HTTP method |
-| `route` | The route template, such as `/v1/collections/{name}/documents`. `unmatched` for a path with no route |
+| `method` | The HTTP method. `other` for a method that is not `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` or `OPTIONS` |
+| `route` | The route template, such as `/v1/collections/{name}/documents`. `unmatched` for a path with no route, and for a request refused for its body size, because that refusal comes before the routing |
 | `status` | The HTTP status |
 | `duration_ms` | Milliseconds until the response starts. For `/v1/answer/stream` this is the time until the first byte, not until the last event |
 
@@ -115,7 +115,7 @@ The counters start at zero when the process starts. Each worker process has its 
 
 | Metric | Type | Labels | Counts |
 | --- | --- | --- | --- |
-| `evidencia_requests_total` | counter | `route`, `method`, `status` | HTTP requests. `route` is the route template, or `unmatched` |
+| `evidencia_requests_total` | counter | `route`, `method`, `status` | HTTP requests. `route` and `method` have the values of the request lines |
 | `evidencia_request_seconds` | histogram | `route` | Seconds until the response starts |
 | `evidencia_abstentions_total` | counter | `gate` | Questions that a step stopped: `retrieve`, `select`, `sufficient` or `grounded` |
 | `evidencia_decision_calls_total` | counter | `gate` | Calls to the decision backend. One `select` call scores a batch of passages |
@@ -123,7 +123,7 @@ The counters start at zero when the process starts. Each worker process has its 
 | `evidencia_select_batch_size` | histogram | none | Passages in one `select` call |
 | `evidencia_source_fetches_total` | counter | `source` | Fetches from a public source, failed ones included. An answer from the cache is not a fetch |
 | `evidencia_source_errors_total` | counter | `source` | Failed fetches and failed list refreshes of a public source |
-| `evidencia_source_pauses_total` | counter | `source` | Times the circuit breaker paused a public source for 60 seconds. Refer to [Public sources](sources.md) |
+| `evidencia_source_pauses_total` | counter | `source` | Times the circuit breaker paused a public source for 60 seconds. A failure during a pause makes the pause longer and is not a new pause. Refer to [Public sources](sources.md) |
 | `evidencia_embed_calls_total` | counter | none | Calls to the embedder |
 | `evidencia_embed_texts_total` | counter | none | Texts that the embedder embedded |
 
@@ -133,7 +133,7 @@ Some example queries:
 
 | Question | PromQL |
 | --- | --- |
-| Abstention rate by gate | `sum by (gate) (rate(evidencia_abstentions_total[5m])) / sum(rate(evidencia_requests_total{route=~"/v1/(context\|answer)"}[5m]))` |
+| Abstentions per minute, by gate | `60 * sum by (gate) (rate(evidencia_abstentions_total[5m]))` |
 | 95th percentile latency of `/v1/answer` | `histogram_quantile(0.95, rate(evidencia_request_seconds_bucket{route="/v1/answer"}[5m]))` |
 | Sources that the breaker paused in the last hour | `increase(evidencia_source_pauses_total[1h]) > 0` |
 | Share of failed decision calls | `sum(rate(evidencia_decision_errors_total{error="unavailable"}[5m])) / sum(rate(evidencia_decision_calls_total[5m]))` |

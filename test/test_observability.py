@@ -315,3 +315,69 @@ def test_config_reads_the_log_settings_from_the_environment():
     cfg = Config.load(env={"EVIDENCIA_LOG_FORMAT": "json", "EVIDENCIA_LOG_LEVEL": "debug"})
     assert (cfg.log_format, cfg.log_level) == ("json", "DEBUG")
     assert (Config().log_format, Config().log_level) == ("text", "INFO")
+
+
+def test_an_unknown_method_adds_no_metric_series():
+    c = client_for()
+    for method in ("FOO1", "FOO2"):
+        c.request(method, "/no/route")
+    assert sample("evidencia_requests_total", route="unmatched", method="FOO1", status="404") == 0
+    assert sample("evidencia_requests_total", route="unmatched", method="other", status="404") >= 2
+
+
+def test_an_unhandled_error_replies_with_the_id_and_logs_the_traceback_under_it(records):
+    engine = Evidencia(Config(), decision=StubDecision(), chat=StubChat())
+    engine.collection("geo", create=True).add(DOC, "geo.txt")
+    engine.context = lambda *a, **k: 1 / 0
+    c = TestClient(create_app(engine=engine), raise_server_exceptions=False)
+    r = c.post("/v1/context", json={"question": Q, "collection": "geo"}, headers={"X-Request-ID": "boom-1"})
+    assert (r.status_code, r.headers["x-request-id"], r.json()) == (500, "boom-1", {"detail": "internal error"})
+    (failed,) = [rec for rec in records if rec.exc_info]
+    assert failed.request_id == "boom-1" and failed.exc_info[0] is ZeroDivisionError
+    assert [rec.status for rec in records if getattr(rec, "route", None)] == [500]
+
+
+def test_the_request_line_quotes_control_characters_of_the_path(records):
+    client_for().get("/x%1B[31mred")
+    (line,) = [r for r in records if getattr(r, "route", None)]
+    assert "\x1b" not in line.getMessage() and "%1B" in line.getMessage()
+
+
+def test_concurrent_failures_count_one_pause(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr("evidencia.sources.time.monotonic", lambda: now[0])
+
+    class Http:
+        def get(self, url, params=None, timeout=None, stream=False):
+            raise requests.ConnectionError("no route")
+
+    source = Wikipedia(Http(), STOPWORDS)
+    before = sample("evidencia_source_pauses_total", source="pt.wikipedia")
+    for _ in range(6):     # as fetches that started before the pause and fail after it
+        source._failed(requests.ConnectionError("no route"), 0.1)
+    assert sample("evidencia_source_pauses_total", source="pt.wikipedia") - before == 1
+
+
+def test_debug_applies_to_the_lines_of_evidencia_only():
+    root, ours = logging.getLogger(), logging.getLogger("evidencia")
+    saved = root.handlers[:], root.level, ours.level
+    try:
+        # a library logger with no level of its own, as urllib3 has in the service
+        library = logging.getLogger("evidencia-test-library")
+        configure_logging("text", "DEBUG")
+        assert ours.isEnabledFor(logging.DEBUG) and not library.isEnabledFor(logging.DEBUG)
+        assert library.isEnabledFor(logging.INFO)
+        configure_logging("text", "WARNING")
+        assert not ours.isEnabledFor(logging.INFO) and not library.isEnabledFor(logging.INFO)
+    finally:
+        root.handlers[:] = saved[0]
+        root.setLevel(saved[1])
+        ours.setLevel(saved[2])
+
+
+def test_an_extra_field_does_not_replace_a_standard_field():
+    record = logging.LogRecord("evidencia", logging.INFO, __file__, 1, "real", (), None)
+    record.level = "FAKE"
+    RequestIdFilter().filter(record)
+    line = json.loads(JsonFormatter().format(record))
+    assert (line["level"], line["message"]) == ("INFO", "real")

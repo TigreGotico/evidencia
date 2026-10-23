@@ -11,6 +11,7 @@ import threading
 import time
 from importlib import resources
 from pathlib import PurePath
+from urllib.parse import quote
 from typing import Annotated, Literal
 
 from curl_cffi import requests as curl
@@ -34,6 +35,8 @@ HEALTH_TTL = 10.0       # seconds a decision-backend probe result is reused by /
 URL_FETCH_TIMEOUT = 30.0    # seconds for the whole download of a document fetched by URL
 MAX_QUESTION = 2000         # characters in a question
 MAX_TEXT = 20_000           # characters in an answer or one evidence passage sent for a grounding check
+# a method outside this set is counted as "other", so a client cannot add metric series
+METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
 EXTENSIONS = {".txt": "text", ".md": "markdown", ".markdown": "markdown", ".html": "html", ".htm": "html", ".pdf": "pdf"}
 
 
@@ -138,23 +141,26 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
         rid = request_id(request.headers.get("x-request-id"))
         token = REQUEST_ID.set(rid)
         started = time.perf_counter()
-        status = 500
         try:
             response = await call_next(request)
-            status = response.status_code
-            response.headers["x-request-id"] = rid
-            return response
-        finally:
-            seconds = time.perf_counter() - started
-            # the route template, not the path, so a collection or document name adds no metric series
-            route = getattr(request.scope.get("route"), "path", "unmatched")
-            REQUESTS.labels(route, request.method, str(status)).inc()
-            REQUEST_SECONDS.labels(route).observe(seconds)
-            LOG.log(logging.DEBUG if route in ("/health", "/metrics") else logging.INFO,
-                    "%s %s %s %.0f ms", request.method, request.url.path, status, seconds * 1000,
-                    extra={"method": request.method, "route": route, "status": status,
-                           "duration_ms": round(seconds * 1000, 1)})
-            REQUEST_ID.reset(token)
+        except Exception:
+            # logged and answered here, while the request id is still set
+            LOG.exception("unhandled error")
+            response = JSONResponse({"detail": "internal error"}, status_code=500)
+        response.headers["x-request-id"] = rid
+        seconds = time.perf_counter() - started
+        # the route template, not the path, so a collection or document name adds no metric series
+        route = getattr(request.scope.get("route"), "path", "unmatched")
+        method = request.method if request.method in METHODS else "other"
+        REQUESTS.labels(route, method, str(response.status_code)).inc()
+        REQUEST_SECONDS.labels(route).observe(seconds)
+        # quoted, so a control character in the path does not reach a terminal that shows the log
+        LOG.log(logging.DEBUG if route in ("/health", "/metrics") else logging.INFO,
+                "%s %s %s %.0f ms", method, quote(request.url.path), response.status_code, seconds * 1000,
+                extra={"method": method, "route": route, "status": response.status_code,
+                       "duration_ms": round(seconds * 1000, 1)})
+        REQUEST_ID.reset(token)
+        return response
 
     def auth(request: Request):
         if not config.api_key:
