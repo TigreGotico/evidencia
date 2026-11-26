@@ -20,6 +20,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field, ValidationError, model_validator
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from evidencia import __version__
 from evidencia.config import REQUEST_SIZES, THRESHOLDS, Config
@@ -173,8 +174,8 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
     def error(message: str, status: int, headers=None) -> JSONResponse:
         return JSONResponse({"detail": message, "error": {"message": message}}, status_code=status, headers=headers)
 
-    @app.exception_handler(HTTPException)
-    def http_error(_, e: HTTPException):
+    @app.exception_handler(StarletteHTTPException)
+    def http_error(_, e: StarletteHTTPException):
         return error(e.detail, e.status_code, e.headers)
 
     # the cause names internal hosts and credentials errors: it goes to the log, not to the client

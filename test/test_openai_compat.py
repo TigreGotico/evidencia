@@ -54,3 +54,9 @@ def test_a_vector_store_search_needs_the_key():
     client, _ = sdk(key="errada")
     with pytest.raises(openai.AuthenticationError):
         client.vector_stores.search("geo", query=Q)
+
+
+def test_an_unserved_openai_route_says_why():
+    client, _ = sdk()
+    with pytest.raises(openai.NotFoundError, match="Not Found"):
+        client.chat.completions.create(model="x", messages=[{"role": "user", "content": Q}])
