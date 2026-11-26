@@ -26,13 +26,20 @@ The script runs every case through the local backend and writes each probability
 
 AUROC on `eval/gates_pt.json`:
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="img/gates-auroc-dark.svg">
+  <img alt="AUROC by gate on eval/gates_pt.json. On the hard grounding cases Jevásio-0.8B-v2 scores 0.953, Kev-0.8B 0.781 and the word-overlap baseline 0.500; on the easy cases the baseline is as good as a model." src="img/gates-auroc.svg">
+</picture>
+
+`img/plot_gates.py` makes this figure from `benchmarks/jevasio-0.8b-v2.json` and `benchmarks/kev-0.8b.json`.
+
 | Gate, subset | Cases | Jevásio-0.8B-v2 | Kev-0.8B | Baseline |
 | --- | --- | --- | --- | --- |
-| Select, all | 42 | 0.978 | 0.918 | 0.909 |
-| Sufficient, easy | 30 | 0.955 | 0.821 | 0.973 |
+| Select, all | 42 | 0.978 | 0.921 | 0.909 |
+| Sufficient, easy | 30 | 0.951 | 0.821 | 0.973 |
 | Sufficient, hard | 10 | 0.840 | 0.960 | 0.060 |
 | Grounded, easy | 28 | 0.995 | 0.913 | 1.000 |
-| Grounded, hard | 16 | 0.953 | 0.812 | 0.500 |
+| Grounded, hard | 16 | 0.953 | 0.781 | 0.500 |
 
 On the easy cases, word overlap is as good as a model. On the hard cases, word overlap fails, and the models stay useful.
 
@@ -42,8 +49,8 @@ Jevásio ranks the grounding cases well, but it gives high probabilities to some
 
 | Threshold | Jevásio: wrong answers passed | Jevásio: right answers blocked | Kev: wrong answers passed | Kev: right answers blocked |
 | --- | --- | --- | --- | --- |
-| 0.5 | 10 | 0 | 8 | 1 |
-| 0.7 | 5 | 0 | 4 | 4 |
+| 0.5 | 10 | 0 | 8 | 2 |
+| 0.7 | 5 | 0 | 5 | 5 |
 | 0.8 | 3 | 0 | 3 | 9 |
 | 0.9 | 3 | 0 | 0 | 16 |
 
