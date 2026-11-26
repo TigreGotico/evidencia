@@ -69,7 +69,7 @@ def test_fail_closed_is_503_and_hides_the_cause(caplog):
     c.post("/v1/collections/geo/documents", json={"source": "geo.txt", "text": DOC})
     r = c.post("/v1/answer", json={"collection": "geo", "question": Q})
     assert r.status_code == 503
-    assert r.json() == {"detail": "decision backend unavailable"}
+    assert r.json() == {"detail": "decision backend unavailable", "error": {"message": "decision backend unavailable"}}
     assert "stub is down" in caplog.text
 
 
@@ -79,7 +79,7 @@ def test_missing_generator_is_502_and_hides_the_cause(caplog):
     c.post("/v1/collections/geo/documents", json={"source": "geo.txt", "text": DOC})
     r = c.post("/v1/answer", json={"collection": "geo", "question": Q})
     assert r.status_code == 502
-    assert r.json() == {"detail": "generator unavailable"}
+    assert r.json() == {"detail": "generator unavailable", "error": {"message": "generator unavailable"}}
     assert "no generator configured" in caplog.text
 
 
@@ -177,7 +177,7 @@ def test_malformed_pdf_is_422():
 def test_refused_request_is_422_and_hides_the_cause(caplog):
     c = client_for(decision=StubDecision(reject={"grounded"}))
     r = c.post("/v1/check/grounding", json={"question": Q, "evidence": ["Lisboa."], "answer": "Lisboa."})
-    assert r.status_code == 422 and r.json() == {"detail": "decision model rejected the request"}
+    assert r.status_code == 422 and r.json() == {"detail": "decision model rejected the request", "error": {"message": "decision model rejected the request"}}
     assert "state too long" in caplog.text
     q = {"grounded": {"type": "noul", "instructions": "?"}}
     assert c.post("/v1/systemone", json={"state": {}, "questions": q}).status_code == 422
@@ -259,7 +259,7 @@ def test_url_ingest_limits_size_and_refuses_redirects(web):
     assert ingest("/big").status_code == 413
     assert ingest("/moved").status_code == 422
     r = c.post("/v1/collections/geo/documents", json={"source": "x", "url": "http://127.0.0.1:1/"})
-    assert r.status_code == 502 and r.json() == {"detail": "could not fetch the URL"}
+    assert r.status_code == 502 and r.json() == {"detail": "could not fetch the URL", "error": {"message": "could not fetch the URL"}}
 
 
 def test_retrieve_marks_a_refused_passage_and_keeps_the_rest():

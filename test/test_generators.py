@@ -123,6 +123,6 @@ def test_the_default_generator_answers_through_llama_server(monkeypatch):
 def test_a_stopped_chat_server_and_a_bad_key_say_what_to_fix(monkeypatch):
     r = answer_with(monkeypatch, requests.ConnectionError("refused"))
     assert r.status_code == 502
-    assert r.json() == {"detail": "cannot connect to the chat model server; is it running?"}
+    assert r.json() == {"detail": "cannot connect to the chat model server; is it running?", "error": {"message": "cannot connect to the chat model server; is it running?"}}
     r = answer_with(monkeypatch, Recorder({"error": "bad key"}, status=401))
-    assert r.json() == {"detail": "the chat model provider refused the API key"}
+    assert r.json() == {"detail": "the chat model provider refused the API key", "error": {"message": "the chat model provider refused the API key"}}

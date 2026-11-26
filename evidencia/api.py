@@ -169,21 +169,29 @@ def create_app(config: Config | None = None, engine: Evidencia | None = None) ->
         if not hmac.compare_digest(given.encode(), f"Bearer {config.api_key}".encode()):
             raise HTTPException(401, "invalid or missing bearer token")
 
+    # "error.message" is the field OpenAI SDKs put in the exception text; "detail" is FastAPI's and our clients'.
+    def error(message: str, status: int, headers=None) -> JSONResponse:
+        return JSONResponse({"detail": message, "error": {"message": message}}, status_code=status, headers=headers)
+
+    @app.exception_handler(HTTPException)
+    def http_error(_, e: HTTPException):
+        return error(e.detail, e.status_code, e.headers)
+
     # the cause names internal hosts and credentials errors: it goes to the log, not to the client
     @app.exception_handler(DecisionUnavailable)
     def decision_down(_, e: DecisionUnavailable):
         LOG.error("decision backend unavailable: %s", e)
-        return JSONResponse({"detail": "decision backend unavailable"}, status_code=503)
+        return error("decision backend unavailable", 503)
 
     @app.exception_handler(DecisionRejected)
     def decision_rejected(_, e: DecisionRejected):
         LOG.warning("decision model rejected a request: %s", e)
-        return JSONResponse({"detail": "decision model rejected the request"}, status_code=422)
+        return error("decision model rejected the request", 422)
 
     @app.exception_handler(GeneratorUnavailable)
     def generator_down(_, e: GeneratorUnavailable):
         LOG.error("generator unavailable: %s", e)
-        return JSONResponse({"detail": e.reason}, status_code=502)
+        return error(e.reason, 502)
 
     def collection_or_404(name: str):
         try:
